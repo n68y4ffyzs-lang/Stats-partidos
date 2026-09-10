@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#16241C" />
+<title>Cuaderno de partido</title>
+
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+  html, body { margin: 0; padding: 0; background: #16241C; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ===========================================================
+   CONFIGURACION DE SUPABASE
+   La URL y la clave se introducen desde la propia app (pantalla
+   "Sincronización") y se guardan en este dispositivo. No hace
+   falta editar este archivo. Mientras no se configuren, la app
+   funciona igualmente en modo solo-local (localStorage).
+=========================================================== */
+const TABLE = "registro_partido_data";
+const SUPABASE_URL_KEY = "rp_supabase_url";
+const SUPABASE_ANON_KEY_KEY = "rp_supabase_anon_key";
+
+function isValidSupabaseConfig(url, key) {
+  return !!(url && key && /^https?:\/\//.test(url));
+}
+
+function getStoredSupabaseConfig() {
+  return {
+    url: localStorage.getItem(SUPABASE_URL_KEY) || "",
+    key: localStorage.getItem(SUPABASE_ANON_KEY_KEY) || "",
+  };
+}
+
+function setStoredSupabaseConfig(url, key) {
+  if (url) localStorage.setItem(SUPABASE_URL_KEY, url);
+  else localStorage.removeItem(SUPABASE_URL_KEY);
+  if (key) localStorage.setItem(SUPABASE_ANON_KEY_KEY, key);
+  else localStorage.removeItem(SUPABASE_ANON_KEY_KEY);
+}
+
+/* ---------------------------------------------------------
+   Tipos de evento y su agrupación / color
+--------------------------------------------------------- */
+const EVENT_TYPES = [
+  { id: "gol", label: "Gol", group: "ataque" },
+  { id: "asistencia", label: "Asistencia", group: "ataque" },
+  { id: "remate_puerta", label: "Remate a puerta", group: "ataque" },
+  { id: "remate_fuera", label: "Remate fuera", group: "ataque" },
+  { id: "regate", label: "Regate", group: "ataque" },
+  { id: "pase_clave", label: "Pase clave", group: "posesion" },
+  { id: "perdida", label: "Pérdida de balón", group: "posesion" },
+  { id: "recuperacion", label: "Recuperación", group: "posesion" },
+  { id: "duelo_ganado", label: "Duelo aéreo ganado", group: "defensa" },
+  { id: "duelo_perdido", label: "Duelo aéreo perdido", group: "defensa" },
+  { id: "falta_cometida", label: "Falta cometida", group: "defensa" },
+  { id: "falta_recibida", label: "Falta recibida", group: "defensa" },
+  { id: "amarilla", label: "Tarjeta amarilla", group: "disciplina" },
+  { id: "roja", label: "Tarjeta roja", group: "disciplina" },
+];
+
+const GROUP_META = {
+  ataque: { label: "Ataque", cls: "chip-turf" },
+  posesion: { label: "Posesión", cls: "chip-cielo" },
+  defensa: { label: "Defensa", cls: "chip-amber" },
+  disciplina: { label: "Disciplina", cls: "chip-crimson" },
+};
+
+const EVENT_LABEL = Object.fromEntries(EVENT_TYPES.map((e) => [e.id, e.label]));
+
+/* ---------------------------------------------------------
+   Utilidades
+--------------------------------------------------------- */
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatClock(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
+  const s = Math.floor(totalSeconds % 60).toString().padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function matchMinute(match) {
+  const { half1Elapsed, half2Elapsed, activeHalf } = match.clock;
+  if (activeHalf === 1) return Math.floor(half1Elapsed / 60) + 1;
+  return match.halfLength + Math.floor(half2Elapsed / 60) + 1;
+}
+
+function halfLabel(match) {
+  if (match.half === "descanso") return "Descanso";
+  if (match.half === "finalizado") return "Finalizado";
+  return match.half === 1 ? "1ª parte" : "2ª parte";
+}
+
+/* ---------------------------------------------------------
+   Almacenamiento local + sincronización con Supabase
+--------------------------------------------------------- */
+const DATA_KEY = "rp_data_v1";
+const TEAM_CODE_KEY = "rp_team_code";
+const DEVICE_ID_KEY = "rp_device_id";
+
+function emptyData() {
+  return { squad: [], matchesList: [], matchesById: {}, updatedAt: 0 };
+}
+
+function loadLocalData() {
+  try {
+    const raw = localStorage.getItem(DATA_KEY);
+    if (!raw) return emptyData();
+    const parsed = JSON.parse(raw);
+    return {
+      squad: parsed.squad || [],
+      matchesList: parsed.matchesList || [],
+      matchesById: parsed.matchesById || {},
+      updatedAt: parsed.updatedAt || 0,
+    };
+  } catch (e) {
+    return emptyData();
+  }
+}
+
+function saveLocalData(data) {
+  try {
+    localStorage.setItem(DATA_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.error("Error guardando en localStorage", e);
+  }
+}
+
+function getDeviceId() {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = genId();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
+function getStoredTeamCode() {
+  return localStorage.getItem(TEAM_CODE_KEY) || "";
+}
+
+function setStoredTeamCode(code) {
+  if (code) localStorage.setItem(TEAM_CODE_KEY, code);
+  else localStorage.removeItem(TEAM_CODE_KEY);
+}
+
+/* ---------------------------------------------------------
+   Estilos compartidos
+--------------------------------------------------------- */
+function GlobalStyles() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+      .mp-app {
+        --pitch: #16241C;
+        --ink: #1E3327;
+        --chalk: #F4F1E8;
+        --chalk-dim: #C9C4B4;
+        --turf: #6FBE44;
+        --cielo: #3E92CC;
+        --amber: #E3A72D;
+        --crimson: #D1373E;
+        font-family: 'Inter', sans-serif;
+        background: var(--pitch);
+        color: var(--chalk);
+        min-height: 100vh;
+      }
+      .mp-app .display {
+        font-family: 'Oswald', sans-serif;
+      }
+      .mp-card {
+        background: var(--ink);
+        border: 1px solid rgba(244,241,232,0.08);
+        border-radius: 10px;
+      }
+      .mp-btn {
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        border-radius: 8px;
+        border: 1px solid rgba(244,241,232,0.15);
+        background: var(--ink);
+        color: var(--chalk);
+        transition: transform 0.08s ease, background 0.15s ease;
+      }
+      .mp-btn:active { transform: scale(0.97); }
+      .mp-btn-primary {
+        background: var(--turf);
+        color: #0F1B14;
+        border: none;
+      }
+      .mp-btn-outline {
+        background: transparent;
+      }
+      .mp-shirt {
+        border-radius: 999px;
+        background: var(--ink);
+        border: 2px solid rgba(244,241,232,0.15);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: 'Oswald', sans-serif;
+      }
+      .mp-shirt.selected {
+        border-color: var(--cielo);
+        background: rgba(62,146,204,0.18);
+      }
+      .chip-turf { border-left: 4px solid var(--turf); }
+      .chip-cielo { border-left: 4px solid var(--cielo); }
+      .chip-amber { border-left: 4px solid var(--amber); }
+      .chip-crimson { border-left: 4px solid var(--crimson); }
+      .mp-input {
+        background: var(--pitch);
+        border: 1px solid rgba(244,241,232,0.2);
+        color: var(--chalk);
+        border-radius: 8px;
+      }
+      .mp-input::placeholder { color: var(--chalk-dim); }
+      .mp-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
+      .mp-scroll::-webkit-scrollbar-thumb { background: rgba(244,241,232,0.2); border-radius: 4px; }
+      .mp-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+    `}</style>
+  );
+}
+
+/* ---------------------------------------------------------
+   Indicador de sincronización
+--------------------------------------------------------- */
+const SYNC_META = {
+  unconfigured: { color: "#8A8577", label: "Sin configurar" },
+  "no-code": { color: "var(--amber)", label: "Sin código de equipo" },
+  offline: { color: "var(--amber)", label: "Sin conexión" },
+  syncing: { color: "var(--cielo)", label: "Sincronizando…" },
+  synced: { color: "var(--turf)", label: "Sincronizado" },
+  error: { color: "var(--crimson)", label: "Error de sincronización" },
+};
+
+function SyncBadge({ status, onClick }) {
+  const meta = SYNC_META[status] || SYNC_META.unconfigured;
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-full mp-card"
+      style={{ color: "var(--chalk-dim)" }}
+    >
+      <span className="mp-dot" style={{ background: meta.color }} />
+      {meta.label}
+    </button>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Sincronización
+--------------------------------------------------------- */
+function SyncSettings({
+  status,
+  teamCode,
+  lastSyncedAt,
+  supabaseUrl,
+  supabaseKey,
+  configured,
+  onSaveTeamCode,
+  onSaveConfig,
+  onSyncNow,
+  onBack,
+}) {
+  const [code, setCode] = useState(teamCode);
+  const [url, setUrl] = useState(supabaseUrl);
+  const [key, setKey] = useState(supabaseKey);
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-6 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <h1 className="display text-2xl font-semibold">Sincronización</h1>
+      </div>
+
+      <div className="mp-card p-3 mb-4">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="mp-dot" style={{ background: (SYNC_META[status] || SYNC_META.unconfigured).color }} />
+          <span className="text-sm">{(SYNC_META[status] || SYNC_META.unconfigured).label}</span>
+        </div>
+        {lastSyncedAt ? (
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Última sincronización: {new Date(lastSyncedAt).toLocaleString()}
+          </div>
+        ) : (
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Aún no se ha sincronizado en este dispositivo.
+          </div>
+        )}
+      </div>
+
+      <div className="mp-card p-3 mb-4">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+          Conexión con Supabase
+        </label>
+        <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
+          Pega aquí la Project URL y la anon public key de tu proyecto de Supabase
+          (Project Settings → API). Se guardan solo en este dispositivo, tendrás que
+          pegarlas también en el iPad y en el ordenador.
+        </p>
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Project URL</label>
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://tuproyecto.supabase.co"
+          className="mp-input px-3 py-2 w-full mt-1 mb-2"
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Anon public key</label>
+        <input
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="eyJhbGciOi..."
+          className="mp-input px-3 py-2 w-full mt-1"
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+        <button
+          onClick={() => onSaveConfig(url.trim(), key.trim())}
+          disabled={!url.trim() || !key.trim()}
+          className="mp-btn mp-btn-primary w-full py-2.5 mt-3 font-semibold disabled:opacity-40"
+        >
+          Guardar conexión
+        </button>
+      </div>
+
+      <div className="mp-card p-3 mb-4">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+          Código de equipo
+        </label>
+        <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
+          Usa el mismo código en el iPad y en el ordenador para que compartan los datos.
+          Solo tú lo conoces, no hace falta cuenta ni login.
+        </p>
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="p.ej. entrenador-2026"
+          className="mp-input px-3 py-2 w-full"
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+        <button
+          onClick={() => onSaveTeamCode(code.trim())}
+          disabled={!code.trim() || !configured}
+          className="mp-btn mp-btn-primary w-full py-2.5 mt-3 font-semibold disabled:opacity-40"
+        >
+          Guardar y sincronizar
+        </button>
+        {!configured && (
+          <div className="text-xs mt-2" style={{ color: "var(--amber)" }}>
+            Primero guarda la conexión con Supabase de arriba.
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={onSyncNow}
+        disabled={!configured || !teamCode}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm disabled:opacity-40"
+      >
+        Sincronizar ahora
+      </button>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Inicio
+--------------------------------------------------------- */
+function Home({ matches, onNewMatch, onOpenMatch, onGoSquad, squadCount, syncStatus, onGoSync }) {
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center justify-between mb-3 pt-2">
+        <div>
+          <h1 className="display text-3xl font-semibold leading-none">Cuaderno de partido</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--chalk-dim)" }}>
+            {squadCount} jugador{squadCount === 1 ? "" : "es"} en la plantilla
+          </p>
+        </div>
+        <button onClick={onGoSquad} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Plantilla
+        </button>
+      </div>
+
+      <div className="mb-6">
+        <SyncBadge status={syncStatus} onClick={onGoSync} />
+      </div>
+
+      <button
+        onClick={onNewMatch}
+        className="mp-btn mp-btn-primary w-full py-4 text-lg font-semibold mb-6 display"
+      >
+        Nuevo partido
+      </button>
+
+      <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
+        Partidos
+      </h2>
+
+      {matches.length === 0 && (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          Aún no hay partidos registrados. Crea uno cuando empiece el próximo.
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        {matches
+          .slice()
+          .sort((a, b) => (a.date < b.date ? 1 : -1))
+          .map((m) => (
+            <button
+              key={m.id}
+              onClick={() => onOpenMatch(m.id)}
+              className="mp-card p-3 text-left flex items-center justify-between"
+            >
+              <div>
+                <div className="font-semibold">vs {m.opponent}</div>
+                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
+              </div>
+              <span
+                className="text-xs px-2 py-1 rounded-full"
+                style={{
+                  background: m.finished ? "rgba(111,190,68,0.15)" : "rgba(227,167,45,0.18)",
+                  color: m.finished ? "var(--turf)" : "var(--amber)",
+                }}
+              >
+                {m.finished ? "Finalizado" : "En juego"}
+              </span>
+            </button>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Plantilla
+--------------------------------------------------------- */
+function SquadManager({ squad, onSave, onBack }) {
+  const [players, setPlayers] = useState(squad);
+  const [number, setNumber] = useState("");
+  const [name, setName] = useState("");
+
+  useEffect(() => setPlayers(squad), [squad]);
+
+  function addPlayer() {
+    if (!name.trim()) return;
+    const updated = [
+      ...players,
+      { id: genId(), number: number.trim() || "-", name: name.trim() },
+    ];
+    setPlayers(updated);
+    onSave(updated);
+    setNumber("");
+    setName("");
+  }
+
+  function removePlayer(id) {
+    const updated = players.filter((p) => p.id !== id);
+    setPlayers(updated);
+    onSave(updated);
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-6 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <h1 className="display text-2xl font-semibold">Plantilla</h1>
+      </div>
+
+      <div className="mp-card p-3 mb-4 flex gap-2">
+        <input
+          value={number}
+          onChange={(e) => setNumber(e.target.value)}
+          placeholder="Dorsal"
+          className="mp-input px-3 py-2 w-20 text-center"
+        />
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Nombre del jugador"
+          className="mp-input px-3 py-2 flex-1"
+          onKeyDown={(e) => e.key === "Enter" && addPlayer()}
+        />
+        <button onClick={addPlayer} className="mp-btn mp-btn-primary px-4 text-sm font-semibold">
+          Añadir
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {players
+          .slice()
+          .sort((a, b) => Number(a.number) - Number(b.number))
+          .map((p) => (
+            <div key={p.id} className="mp-card p-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="mp-shirt w-9 h-9 text-sm font-semibold">{p.number}</div>
+                <span>{p.name}</span>
+              </div>
+              <button
+                onClick={() => removePlayer(p.id)}
+                className="text-sm"
+                style={{ color: "var(--crimson)" }}
+              >
+                Quitar
+              </button>
+            </div>
+          ))}
+        {players.length === 0 && (
+          <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>
+            Añade jugadores para poder convocarlos en un partido.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Nuevo partido
+--------------------------------------------------------- */
+function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
+  const [opponent, setOpponent] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [halfLength, setHalfLength] = useState(25);
+  const [titulares, setTitulares] = useState([]);
+
+  function toggle(id) {
+    setTitulares((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }
+
+  function submit() {
+    if (!opponent.trim() || titulares.length === 0) return;
+    onCreate({ opponent: opponent.trim(), date, halfLength: Number(halfLength) || 25, titulares });
+  }
+
+  if (squad.length === 0) {
+    return (
+      <div className="max-w-md mx-auto p-4 pb-10">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm mb-4">
+          Volver
+        </button>
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          Primero necesitas añadir jugadores a la plantilla.
+        </div>
+        <button onClick={onGoSquad} className="mp-btn mp-btn-primary w-full py-3 mt-4 font-semibold">
+          Ir a la plantilla
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-6 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <h1 className="display text-2xl font-semibold">Nuevo partido</h1>
+      </div>
+
+      <div className="mp-card p-3 mb-3">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Rival</label>
+        <input
+          value={opponent}
+          onChange={(e) => setOpponent(e.target.value)}
+          placeholder="Nombre del equipo rival"
+          className="mp-input px-3 py-2 w-full mt-1"
+        />
+      </div>
+
+      <div className="flex gap-3 mb-3">
+        <div className="mp-card p-3 flex-1">
+          <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Fecha</label>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="mp-input px-3 py-2 w-full mt-1"
+          />
+        </div>
+        <div className="mp-card p-3 w-28">
+          <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Min./parte</label>
+          <input
+            type="number"
+            value={halfLength}
+            onChange={(e) => setHalfLength(e.target.value)}
+            className="mp-input px-3 py-2 w-full mt-1"
+          />
+        </div>
+      </div>
+
+      <div className="mp-card p-3 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Once inicial</label>
+          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{titulares.length} seleccionados</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {squad
+            .slice()
+            .sort((a, b) => Number(a.number) - Number(b.number))
+            .map((p) => {
+              const active = titulares.includes(p.id);
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => toggle(p.id)}
+                  className="mp-btn px-3 py-2 text-sm flex items-center gap-2"
+                  style={active ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+                >
+                  <span className="font-semibold">{p.number}</span>
+                  <span>{p.name}</span>
+                </button>
+              );
+            })}
+        </div>
+      </div>
+
+      <button
+        onClick={submit}
+        disabled={!opponent.trim() || titulares.length === 0}
+        className="mp-btn mp-btn-primary w-full py-3 font-semibold disabled:opacity-40"
+      >
+        Empezar partido
+      </button>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Partido en directo
+--------------------------------------------------------- */
+function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
+  const [selectedPlayerId, setSelectedPlayerId] = useState(null);
+  const [subOutId, setSubOutId] = useState(null);
+  const tickCount = useRef(0);
+
+  const playerById = useCallback(
+    (id) => squad.find((p) => p.id === id) || { id, number: "?", name: "Desconocido" },
+    [squad]
+  );
+
+  useEffect(() => {
+    if (!match.clock.running) return;
+    const interval = setInterval(() => {
+      const key = match.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
+      const nextVal = match.clock[key] + 1;
+      const updated = { ...match, clock: { ...match.clock, [key]: nextVal } };
+      tickCount.current += 1;
+      onUpdate(updated, tickCount.current % 5 === 0);
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match.clock.running, match.clock.activeHalf, match.clock.half1Elapsed, match.clock.half2Elapsed]);
+
+  function toggleRunning() {
+    onUpdate({ ...match, clock: { ...match.clock, running: !match.clock.running } }, true);
+  }
+
+  function endHalf1() {
+    onUpdate({ ...match, half: "descanso", clock: { ...match.clock, running: false } }, true);
+  }
+
+  function startHalf2() {
+    onUpdate({ ...match, half: 2, clock: { ...match.clock, running: true, activeHalf: 2 } }, true);
+  }
+
+  function addEvent(typeId) {
+    if (!selectedPlayerId) return;
+    const p = playerById(selectedPlayerId);
+    const half = match.clock.activeHalf;
+    const seconds = half === 1 ? match.clock.half1Elapsed : match.clock.half2Elapsed;
+    const minute = matchMinute(match);
+    const entry = {
+      id: genId(),
+      half,
+      seconds,
+      minute,
+      playerId: p.id,
+      playerNumber: p.number,
+      playerName: p.name,
+      type: typeId,
+    };
+    onUpdate({ ...match, events: [...match.events, entry] }, true);
+  }
+
+  function removeEvent(id) {
+    onUpdate({ ...match, events: match.events.filter((e) => e.id !== id) }, true);
+  }
+
+  function removeSub(id) {
+    onUpdate({ ...match, subs: match.subs.filter((s) => s.id !== id) }, true);
+  }
+
+  function confirmSub(inId) {
+    const outP = playerById(subOutId);
+    const inP = playerById(inId);
+    const half = match.clock.activeHalf;
+    const minute = matchMinute(match);
+    const newOnPitch = match.onPitch.map((id) => (id === subOutId ? inId : id));
+    const newBench = match.bench.map((id) => (id === inId ? subOutId : id));
+    const subEntry = {
+      id: genId(),
+      half,
+      minute,
+      outId: outP.id,
+      outName: outP.name,
+      outNumber: outP.number,
+      inId: inP.id,
+      inName: inP.name,
+      inNumber: inP.number,
+    };
+    onUpdate(
+      { ...match, onPitch: newOnPitch, bench: newBench, subs: [...match.subs, subEntry] },
+      true
+    );
+    setSubOutId(null);
+    if (selectedPlayerId === subOutId) setSelectedPlayerId(null);
+  }
+
+  const activeElapsed =
+    match.clock.activeHalf === 1 ? match.clock.half1Elapsed : match.clock.half2Elapsed;
+
+  const timeline = [
+    ...match.events.map((e) => ({ ...e, kind: "event" })),
+    ...match.subs.map((s) => ({ ...s, kind: "sub" })),
+  ].sort((a, b) => (b.half - a.half) || (b.minute - a.minute) || (b.id > a.id ? 1 : -1));
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center justify-between mb-4 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <div className="text-right">
+          <div className="font-semibold">vs {match.opponent}</div>
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{match.date}</div>
+        </div>
+      </div>
+
+      {/* Marcador / cronómetro */}
+      <div className="mp-card p-4 mb-4 flex items-center justify-between">
+        <div>
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{halfLabel(match)}</div>
+          <div className="display text-4xl font-semibold tabular-nums">
+            {formatClock(activeElapsed)}
+          </div>
+        </div>
+        <div className="flex flex-col gap-2 items-end">
+          {(match.half === 1 || match.half === 2) && (
+            <button
+              onClick={toggleRunning}
+              className="mp-btn mp-btn-primary px-4 py-2 text-sm font-semibold"
+            >
+              {match.clock.running ? "Pausar" : "Reanudar"}
+            </button>
+          )}
+          {match.half === 1 && (
+            <button onClick={endHalf1} className="mp-btn mp-btn-outline px-4 py-1.5 text-xs">
+              Fin 1ª parte
+            </button>
+          )}
+          {match.half === "descanso" && (
+            <button onClick={startHalf2} className="mp-btn mp-btn-primary px-4 py-2 text-sm font-semibold">
+              Iniciar 2ª parte
+            </button>
+          )}
+          {match.half === 2 && (
+            <button onClick={onFinish} className="mp-btn mp-btn-outline px-4 py-1.5 text-xs" style={{ color: "var(--crimson)" }}>
+              Finalizar partido
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* En el campo */}
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>En el campo — toca para seleccionar</div>
+      <div className="flex flex-wrap gap-3 mb-4">
+        {match.onPitch.map((id) => {
+          const p = playerById(id);
+          const selected = selectedPlayerId === id;
+          return (
+            <div key={id} className="flex flex-col items-center gap-1" style={{ width: 64 }}>
+              <button
+                onClick={() => setSelectedPlayerId(selected ? null : id)}
+                className={`mp-shirt w-14 h-14 text-lg font-semibold ${selected ? "selected" : ""}`}
+              >
+                {p.number}
+              </button>
+              <span className="text-[11px] text-center leading-tight" style={{ color: "var(--chalk-dim)" }}>
+                {p.name.split(" ")[0]}
+              </span>
+              <button
+                onClick={() => setSubOutId(id)}
+                className="text-[10px]"
+                style={{ color: "var(--cielo)" }}
+              >
+                Cambiar
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Panel de cambio */}
+      {subOutId && (
+        <div className="mp-card p-3 mb-4">
+          <div className="text-sm mb-2">
+            Entra por <span className="font-semibold">{playerById(subOutId).name}</span>:
+          </div>
+          <div className="flex flex-wrap gap-2 mb-2">
+            {match.bench.map((id) => {
+              const p = playerById(id);
+              return (
+                <button
+                  key={id}
+                  onClick={() => confirmSub(id)}
+                  className="mp-btn px-3 py-2 text-sm"
+                >
+                  {p.number} · {p.name}
+                </button>
+              );
+            })}
+            {match.bench.length === 0 && (
+              <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes disponibles.</span>
+            )}
+          </div>
+          <button onClick={() => setSubOutId(null)} className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Cancelar
+          </button>
+        </div>
+      )}
+
+      {/* Banquillo */}
+      {match.bench.length > 0 && (
+        <div className="mb-4">
+          <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Banquillo</div>
+          <div className="flex flex-wrap gap-2">
+            {match.bench.map((id) => {
+              const p = playerById(id);
+              return (
+                <span key={id} className="mp-card px-2 py-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+                  {p.number} · {p.name}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Eventos */}
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        {selectedPlayerId
+          ? `Evento para ${playerById(selectedPlayerId).name}`
+          : "Selecciona un jugador para registrar un evento"}
+      </div>
+      <div className="grid grid-cols-2 gap-2 mb-5">
+        {EVENT_TYPES.map((ev) => (
+          <button
+            key={ev.id}
+            disabled={!selectedPlayerId}
+            onClick={() => addEvent(ev.id)}
+            className={`mp-card ${GROUP_META[ev.group].cls} px-3 py-2.5 text-sm text-left disabled:opacity-30`}
+          >
+            {ev.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Cronología */}
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Cronología</div>
+      <div className="flex flex-col gap-2">
+        {timeline.length === 0 && (
+          <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>Aún no hay eventos registrados.</div>
+        )}
+        {timeline.map((t) =>
+          t.kind === "event" ? (
+            <div key={t.id} className={`mp-card ${GROUP_META[EVENT_TYPES.find((e) => e.id === t.type).group].cls} p-2.5 flex items-center justify-between`}>
+              <span className="text-sm">
+                <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
+                #{t.playerNumber} {t.playerName} — {EVENT_LABEL[t.type]}
+              </span>
+              <button onClick={() => removeEvent(t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
+                Deshacer
+              </button>
+            </div>
+          ) : (
+            <div key={t.id} className="mp-card chip-cielo p-2.5 flex items-center justify-between">
+              <span className="text-sm">
+                <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
+                Cambio: sale #{t.outNumber} {t.outName}, entra #{t.inNumber} {t.inName}
+              </span>
+              <button onClick={() => removeSub(t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
+                Deshacer
+              </button>
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Resumen
+--------------------------------------------------------- */
+function MatchSummary({ match, onBack, onExport }) {
+  const stats = {};
+  match.events.forEach((e) => {
+    if (!stats[e.playerId]) {
+      stats[e.playerId] = { number: e.playerNumber, name: e.playerName, counts: {} };
+    }
+    stats[e.playerId].counts[e.type] = (stats[e.playerId].counts[e.type] || 0) + 1;
+  });
+  const rows = Object.values(stats).sort((a, b) => Number(a.number) - Number(b.number));
+  const usedTypes = EVENT_TYPES.filter((ev) => rows.some((r) => r.counts[ev.id]));
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-4 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <div>
+          <h1 className="display text-2xl font-semibold">Resumen</h1>
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            vs {match.opponent} · {match.date}
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={onExport}
+        className="mp-btn mp-btn-primary w-full py-3 font-semibold mb-5"
+      >
+        Descargar CSV del partido
+      </button>
+
+      {rows.length === 0 ? (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          No se registró ningún evento en este partido.
+        </div>
+      ) : (
+        <div className="mp-scroll overflow-x-auto">
+          <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th className="text-left p-2" style={{ color: "var(--chalk-dim)" }}>Jugador</th>
+                {usedTypes.map((ev) => (
+                  <th key={ev.id} className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>
+                    {ev.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.number + r.name} className="mp-card">
+                  <td className="p-2 whitespace-nowrap">#{r.number} {r.name}</td>
+                  {usedTypes.map((ev) => (
+                    <td key={ev.id} className="text-center p-2">{r.counts[ev.id] || "–"}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {match.subs.length > 0 && (
+        <div className="mt-5">
+          <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Cambios</div>
+          <div className="flex flex-col gap-2">
+            {match.subs.map((s) => (
+              <div key={s.id} className="mp-card chip-cielo p-2.5 text-sm">
+                {s.minute}' — Sale #{s.outNumber} {s.outName}, entra #{s.inNumber} {s.inName}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   App principal
+--------------------------------------------------------- */
+function App() {
+  const [view, setView] = useState("home");
+  const [data, setData] = useState(loadLocalData);
+  const [match, setMatch] = useState(null);
+  const [teamCode, setTeamCodeState] = useState(getStoredTeamCode);
+  const [supabaseConfig, setSupabaseConfig] = useState(getStoredSupabaseConfig);
+  const [syncStatus, setSyncStatus] = useState("unconfigured");
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+
+  const configured = isValidSupabaseConfig(supabaseConfig.url, supabaseConfig.key);
+
+  const dataRef = useRef(data);
+  const teamCodeRef = useRef(teamCode);
+  const matchRef = useRef(match);
+  const pushTimerRef = useRef(null);
+  const supabaseRef = useRef(null);
+  const deviceId = useRef(getDeviceId()).current;
+
+  useEffect(() => { dataRef.current = data; }, [data]);
+  useEffect(() => { teamCodeRef.current = teamCode; }, [teamCode]);
+  useEffect(() => { matchRef.current = match; }, [match]);
+
+  // Crea (o recrea) el cliente de Supabase cuando cambia la configuración
+  useEffect(() => {
+    if (configured && window.supabase) {
+      supabaseRef.current = window.supabase.createClient(supabaseConfig.url, supabaseConfig.key);
+      setSyncStatus(teamCodeRef.current ? "synced" : "no-code");
+    } else {
+      supabaseRef.current = null;
+      setSyncStatus("unconfigured");
+    }
+  }, [configured, supabaseConfig.url, supabaseConfig.key]);
+
+  /* --- Sincronización con Supabase --- */
+
+  function computeStatus() {
+    if (!configured) return "unconfigured";
+    if (!teamCodeRef.current) return "no-code";
+    if (!navigator.onLine) return "offline";
+    return "synced";
+  }
+
+  async function pushToSupabase(stamped) {
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    setSyncStatus("syncing");
+    try {
+      const { error } = await supabaseRef.current.from(TABLE).upsert({
+        team_code: teamCodeRef.current,
+        data: stamped,
+        device_id: deviceId,
+        updated_at: new Date(stamped.updatedAt).toISOString(),
+      });
+      if (error) throw error;
+      setSyncStatus("synced");
+      setLastSyncedAt(Date.now());
+    } catch (e) {
+      console.error("Error sincronizando con Supabase", e);
+      setSyncStatus("error");
+    }
+  }
+
+  function scheduleSync(stamped, immediate) {
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (pushTimerRef.current) {
+      clearTimeout(pushTimerRef.current);
+      pushTimerRef.current = null;
+    }
+    if (immediate) {
+      pushToSupabase(stamped);
+    } else {
+      pushTimerRef.current = setTimeout(() => {
+        pushToSupabase(dataRef.current);
+      }, 1500);
+    }
+  }
+
+  function applyRemoteData(remoteData, remoteUpdatedAt) {
+    const merged = { ...emptyData(), ...remoteData, updatedAt: remoteUpdatedAt };
+    setData(merged);
+    dataRef.current = merged;
+    saveLocalData(merged);
+    if (matchRef.current) {
+      const refreshed = merged.matchesById[matchRef.current.id];
+      if (refreshed) setMatch(refreshed);
+    }
+  }
+
+  async function pullFromSupabase() {
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    setSyncStatus("syncing");
+    try {
+      const { data: row, error } = await supabaseRef.current
+        .from(TABLE)
+        .select("data, updated_at")
+        .eq("team_code", teamCodeRef.current)
+        .maybeSingle();
+      if (error) throw error;
+      if (row && row.data) {
+        const remoteUpdatedAt = new Date(row.updated_at).getTime();
+        if (remoteUpdatedAt > dataRef.current.updatedAt) {
+          applyRemoteData(row.data, remoteUpdatedAt);
+        } else if (dataRef.current.updatedAt > remoteUpdatedAt) {
+          await pushToSupabase(dataRef.current);
+        }
+      } else {
+        await pushToSupabase(dataRef.current);
+      }
+      setSyncStatus("synced");
+      setLastSyncedAt(Date.now());
+    } catch (e) {
+      console.error("Error sincronizando con Supabase", e);
+      setSyncStatus("error");
+    }
+  }
+
+  function saveTeamCode(code) {
+    setStoredTeamCode(code);
+    setTeamCodeState(code);
+    teamCodeRef.current = code;
+    setSyncStatus(computeStatus());
+    if (code) pullFromSupabase();
+  }
+
+  function saveSupabaseConfig(url, key) {
+    setStoredSupabaseConfig(url, key);
+    setSupabaseConfig({ url, key });
+  }
+
+  // Sincroniza al arrancar y suscribe a cambios en tiempo real
+  useEffect(() => {
+    if (!supabaseRef.current || !teamCode) return;
+    pullFromSupabase();
+
+    const channel = supabaseRef.current
+      .channel(`registro_partido_${teamCode}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: TABLE, filter: `team_code=eq.${teamCode}` },
+        (payload) => {
+          const row = payload.new;
+          if (!row || row.device_id === deviceId) return;
+          const remoteUpdatedAt = new Date(row.updated_at).getTime();
+          if (remoteUpdatedAt > dataRef.current.updatedAt) {
+            applyRemoteData(row.data, remoteUpdatedAt);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabaseRef.current.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamCode, configured, supabaseConfig.url, supabaseConfig.key]);
+
+  // Reintenta al recuperar conexión / volver a la pestaña
+  useEffect(() => {
+    function handleOnline() { pullFromSupabase(); }
+    function handleVisibility() {
+      if (document.hidden && pushTimerRef.current) {
+        clearTimeout(pushTimerRef.current);
+        pushTimerRef.current = null;
+        pushToSupabase(dataRef.current);
+      } else if (!document.hidden) {
+        pullFromSupabase();
+      }
+    }
+    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* --- Mutación central de datos --- */
+
+  function commit(nextData, { syncNow = true } = {}) {
+    const stamped = { ...nextData, updatedAt: Date.now() };
+    setData(stamped);
+    dataRef.current = stamped;
+    saveLocalData(stamped);
+    scheduleSync(stamped, syncNow);
+  }
+
+  function saveSquad(updatedSquad) {
+    commit({ ...dataRef.current, squad: updatedSquad });
+  }
+
+  function goHome() {
+    setMatch(null);
+    setView("home");
+  }
+
+  function createMatch({ opponent, date, halfLength, titulares }) {
+    const squad = dataRef.current.squad;
+    const bench = squad.filter((p) => !titulares.includes(p.id)).map((p) => p.id);
+    const newMatch = {
+      id: genId(),
+      opponent,
+      date,
+      halfLength,
+      half: 1,
+      finished: false,
+      clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1 },
+      onPitch: titulares,
+      bench,
+      events: [],
+      subs: [],
+    };
+    const updatedList = [
+      ...dataRef.current.matchesList,
+      { id: newMatch.id, opponent, date, finished: false },
+    ];
+    commit({
+      ...dataRef.current,
+      matchesList: updatedList,
+      matchesById: { ...dataRef.current.matchesById, [newMatch.id]: newMatch },
+    });
+    setMatch(newMatch);
+    setView("live");
+  }
+
+  function openMatch(id) {
+    const m = dataRef.current.matchesById[id];
+    if (!m) return;
+    setMatch(m);
+    setView(m.finished ? "summary" : "live");
+  }
+
+  function updateMatch(updated, persistNow) {
+    setMatch(updated);
+    commit(
+      { ...dataRef.current, matchesById: { ...dataRef.current.matchesById, [updated.id]: updated } },
+      { syncNow: persistNow }
+    );
+  }
+
+  function finishMatch() {
+    const updated = {
+      ...match,
+      half: "finalizado",
+      finished: true,
+      clock: { ...match.clock, running: false },
+    };
+    setMatch(updated);
+    const updatedList = dataRef.current.matchesList.map((m) =>
+      m.id === updated.id ? { ...m, finished: true } : m
+    );
+    commit({
+      ...dataRef.current,
+      matchesList: updatedList,
+      matchesById: { ...dataRef.current.matchesById, [updated.id]: updated },
+    });
+    setView("summary");
+  }
+
+  function exportCSV() {
+    const rows = [["partido", "fecha", "rival", "parte", "minuto", "dorsal", "jugador", "evento"]];
+    match.events.forEach((e) => {
+      rows.push([match.id, match.date, match.opponent, e.half, e.minute, e.playerNumber, e.playerName, EVENT_LABEL[e.type] || e.type]);
+    });
+    match.subs.forEach((s) => {
+      rows.push([match.id, match.date, match.opponent, s.half, s.minute, s.outNumber, s.outName, `sale (entra ${s.inName})`]);
+      rows.push([match.id, match.date, match.opponent, s.half, s.minute, s.inNumber, s.inName, `entra (sale ${s.outName})`]);
+    });
+    const csv = rows
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `partido_${match.opponent.replace(/\s+/g, "_")}_${match.date}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="mp-app">
+      <GlobalStyles />
+      {view === "home" && (
+        <Home
+          matches={data.matchesList}
+          squadCount={data.squad.length}
+          onNewMatch={() => setView("setup")}
+          onOpenMatch={openMatch}
+          onGoSquad={() => setView("squad")}
+          syncStatus={syncStatus}
+          onGoSync={() => setView("sync")}
+        />
+      )}
+      {view === "squad" && (
+        <SquadManager squad={data.squad} onSave={saveSquad} onBack={goHome} />
+      )}
+      {view === "setup" && (
+        <MatchSetup
+          squad={data.squad}
+          onCreate={createMatch}
+          onBack={goHome}
+          onGoSquad={() => setView("squad")}
+        />
+      )}
+      {view === "live" && match && (
+        <LiveMatch
+          match={match}
+          squad={data.squad}
+          onUpdate={updateMatch}
+          onFinish={finishMatch}
+          onBack={goHome}
+        />
+      )}
+      {view === "summary" && match && (
+        <MatchSummary match={match} onBack={goHome} onExport={exportCSV} />
+      )}
+      {view === "sync" && (
+        <SyncSettings
+          status={syncStatus}
+          teamCode={teamCode}
+          lastSyncedAt={lastSyncedAt}
+          supabaseUrl={supabaseConfig.url}
+          supabaseKey={supabaseConfig.key}
+          configured={configured}
+          onSaveTeamCode={saveTeamCode}
+          onSaveConfig={saveSupabaseConfig}
+          onSyncNow={pullFromSupabase}
+          onBack={goHome}
+        />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
