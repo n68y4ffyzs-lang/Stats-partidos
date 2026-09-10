@@ -686,6 +686,7 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
 function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [subOutId, setSubOutId] = useState(null);
+  const [tab, setTab] = useState("jugadores");
   const [, forceTick] = useState(0);
 
   const matchRef = useRef(match);
@@ -867,7 +868,36 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         </div>
       </div>
 
+      {/* Pestañas: jugadores/eventos en directo, o el resumen de cómo va el partido */}
+      <div className="flex gap-2 mb-3">
+        <button
+          onClick={() => setTab("jugadores")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "jugadores" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Jugadores
+        </button>
+        <button
+          onClick={() => setTab("estadisticas")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "estadisticas" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Estadísticas del partido
+        </button>
+      </div>
+
+      {tab === "estadisticas" && (
+        match.events.length === 0 ? (
+          <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+            Aún no hay eventos registrados en este partido.
+          </div>
+        ) : (
+          <MatchTotals events={match.events} />
+        )
+      )}
+
       {/* Layout horizontal: en el campo a la izquierda, eventos + cronología a la derecha */}
+      {tab === "jugadores" && (
       <div className="lg:grid lg:grid-cols-[260px_1fr] lg:gap-4 lg:items-start">
         <div className="mb-4 lg:mb-0">
           <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
@@ -989,6 +1019,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -1090,12 +1121,10 @@ function StatCard({ label, value, sub }) {
   );
 }
 
-function TeamTotals({ matches }) {
+function MatchTotals({ events }) {
   const totals = {};
-  matches.forEach((m) => {
-    m.events.forEach((e) => {
-      totals[e.type] = (totals[e.type] || 0) + 1;
-    });
+  events.forEach((e) => {
+    totals[e.type] = (totals[e.type] || 0) + 1;
   });
 
   const faltas = totals["falta_cometida"] || 0;
@@ -1128,20 +1157,20 @@ function TeamTotals({ matches }) {
 }
 
 function SeasonStats({ matches, onBack }) {
-  const [tab, setTab] = useState("jugadores");
-
   const stats = {};
   let matchesWithEvents = 0;
 
   matches.forEach((m) => {
     if (m.events.length > 0) matchesWithEvents += 1;
-    m.events.forEach((e) => {
-      if (!stats[e.playerId]) {
-        stats[e.playerId] = { number: e.playerNumber, name: e.playerName, counts: {}, total: 0 };
-      }
-      stats[e.playerId].counts[e.type] = (stats[e.playerId].counts[e.type] || 0) + 1;
-      stats[e.playerId].total += 1;
-    });
+    m.events
+      .filter((e) => e.type !== "pase_clave")
+      .forEach((e) => {
+        if (!stats[e.playerId]) {
+          stats[e.playerId] = { number: e.playerNumber, name: e.playerName, counts: {}, total: 0 };
+        }
+        stats[e.playerId].counts[e.type] = (stats[e.playerId].counts[e.type] || 0) + 1;
+        stats[e.playerId].total += 1;
+      });
   });
 
   const rows = Object.values(stats).sort((a, b) => b.total - a.total);
@@ -1162,29 +1191,10 @@ function SeasonStats({ matches, onBack }) {
         </div>
       </div>
 
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setTab("jugadores")}
-          className="mp-btn px-3 py-2 text-sm flex-1"
-          style={tab === "jugadores" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-        >
-          Por jugador
-        </button>
-        <button
-          onClick={() => setTab("equipo")}
-          className="mp-btn px-3 py-2 text-sm flex-1"
-          style={tab === "equipo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-        >
-          Totales del equipo
-        </button>
-      </div>
-
       {rows.length === 0 ? (
         <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
           Aún no hay eventos registrados en ningún partido.
         </div>
-      ) : tab === "equipo" ? (
-        <TeamTotals matches={matches} />
       ) : (
         <div className="mp-scroll overflow-x-auto">
           <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
