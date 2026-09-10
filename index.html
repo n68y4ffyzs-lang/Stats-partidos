@@ -69,6 +69,8 @@ const EVENT_TYPES = [
   { id: "recuperacion", label: "Recuperación", group: "posesion" },
   { id: "duelo_ganado", label: "Duelo aéreo ganado", group: "defensa" },
   { id: "duelo_perdido", label: "Duelo aéreo perdido", group: "defensa" },
+  { id: "duelo_general_ganado", label: "Duelo ganado", group: "defensa" },
+  { id: "duelo_general_perdido", label: "Duelo perdido", group: "defensa" },
   { id: "falta_cometida", label: "Falta cometida", group: "defensa" },
   { id: "falta_recibida", label: "Falta recibida", group: "defensa" },
   { id: "amarilla", label: "Tarjeta amarilla", group: "disciplina" },
@@ -1192,8 +1194,8 @@ function MatchTotals({ events }) {
   const faltas = totals["falta_cometida"] || 0;
   const tirosPuerta = totals["remate_puerta"] || 0;
   const tirosFuera = totals["remate_fuera"] || 0;
-  const duelosGanados = totals["duelo_ganado"] || 0;
-  const duelosPerdidos = totals["duelo_perdido"] || 0;
+  const duelosGanados = (totals["duelo_ganado"] || 0) + (totals["duelo_general_ganado"] || 0);
+  const duelosPerdidos = (totals["duelo_perdido"] || 0) + (totals["duelo_general_perdido"] || 0);
   const duelosTotales = duelosGanados + duelosPerdidos;
   const duelosPct = duelosTotales === 0 ? null : Math.round((duelosGanados / duelosTotales) * 100);
   const robos = totals["recuperacion"] || 0;
@@ -1224,8 +1226,8 @@ function PlayerStatsAccordion({ players, events }) {
   function statsFor(playerId) {
     const own = events.filter((e) => e.playerId === playerId);
     const count = (type) => own.filter((e) => e.type === type).length;
-    const duelosGanados = count("duelo_ganado");
-    const duelosPerdidos = count("duelo_perdido");
+    const duelosGanados = count("duelo_ganado") + count("duelo_general_ganado");
+    const duelosPerdidos = count("duelo_perdido") + count("duelo_general_perdido");
     const duelosTotales = duelosGanados + duelosPerdidos;
     const duelosPct = duelosTotales === 0 ? null : Math.round((duelosGanados / duelosTotales) * 100);
     const regatesOk = count("regate");
