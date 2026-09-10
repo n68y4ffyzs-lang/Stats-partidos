@@ -936,62 +936,6 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
 
       {tab === "estadisticas" && (
         <React.Fragment>
-          {(() => {
-            const conceded = match.concededSetPieces || [];
-            const cornerConceded = conceded.filter((e) => (e.origin || "corner") === "corner").length;
-            const golEncajadoEventos = match.events.filter((e) => e.type === "gol_encajado").length;
-
-            function addConceded(origin) {
-              const entry = { id: genId(), origin, half: match.clock.activeHalf, minute: currentMinute() };
-              onUpdate({ ...match, concededSetPieces: [...conceded, entry] }, true);
-            }
-            function removeLastConceded(origin) {
-              const idxFromEnd = [...conceded].reverse().findIndex((e) => (e.origin || "corner") === origin);
-              if (idxFromEnd === -1) return;
-              const idx = conceded.length - 1 - idxFromEnd;
-              onUpdate(
-                { ...match, concededSetPieces: [...conceded.slice(0, idx), ...conceded.slice(idx + 1)] },
-                true
-              );
-            }
-
-            return (
-              <div className="mp-card p-3 mb-4">
-                <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Balón parado y goles encajados</div>
-                <div className="grid grid-cols-2 gap-2 mb-2">
-                  <StatCard
-                    label="Goles de córner a favor"
-                    value={match.events.filter((e) => e.type === "gol_corner").length}
-                  />
-                  <StatCard label="Encajados de córner" value={cornerConceded} />
-                  <StatCard
-                    label="Encajados en jugada"
-                    value={golEncajadoEventos}
-                    sub="Evento «Gol encajado» del portero"
-                  />
-                  <StatCard label="Encajados totales" value={cornerConceded + golEncajadoEventos} />
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => addConceded("corner")}
-                    className="mp-btn mp-btn-outline px-3 py-2 text-xs flex-1"
-                  >
-                    + Encajado de córner
-                  </button>
-                  {cornerConceded > 0 && (
-                    <button
-                      onClick={() => removeLastConceded("corner")}
-                      className="mp-btn mp-btn-outline px-3 py-2 text-xs"
-                      style={{ color: "var(--crimson)" }}
-                    >
-                      Deshacer
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
-
           {match.events.length === 0 ? (
             <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
               Aún no hay eventos registrados en este partido.
@@ -1622,6 +1566,29 @@ function PlayerStatsAccordion({ players, events }) {
                   </div>
                 </div>
               )}
+              {open &&
+                (() => {
+                  const own = events.filter((e) => e.playerId === p.id);
+                  const counts = {};
+                  own.forEach((e) => {
+                    counts[e.type] = (counts[e.type] || 0) + 1;
+                  });
+                  const usedTypes = EVENT_TYPES.filter((ev) => counts[ev.id]);
+                  if (usedTypes.length === 0) return null;
+                  return (
+                    <div className="px-3 pb-3" style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}>
+                      <div className="text-xs pt-2 mb-1" style={{ color: "var(--chalk-dim)" }}>Todos los eventos</div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                        {usedTypes.map((ev) => (
+                          <div key={ev.id} className="flex items-center justify-between text-sm">
+                            <span style={{ color: "var(--chalk-dim)" }}>{ev.label}</span>
+                            <span className="font-semibold">{counts[ev.id]}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
             </div>
           );
         })}
@@ -1714,14 +1681,18 @@ function SeasonStats({ matches, squad, onBack }) {
       .filter((e) => e.type !== "pase_clave")
       .forEach((e) => {
         if (!stats[e.playerId]) {
-          stats[e.playerId] = { number: e.playerNumber, name: e.playerName, counts: {}, total: 0 };
+          stats[e.playerId] = { number: e.playerNumber, name: e.playerName, counts: {} };
         }
         stats[e.playerId].counts[e.type] = (stats[e.playerId].counts[e.type] || 0) + 1;
-        stats[e.playerId].total += 1;
       });
   });
 
-  const rows = Object.values(stats).sort((a, b) => b.total - a.total);
+  const rows = Object.values(stats)
+    .map((r) => ({
+      ...r,
+      golesAsistencias: ALL_GOAL_TYPES.reduce((sum, t) => sum + (r.counts[t] || 0), 0) + (r.counts["asistencia"] || 0),
+    }))
+    .sort((a, b) => b.golesAsistencias - a.golesAsistencias);
   const usedTypes = EVENT_TYPES.filter((ev) => rows.some((r) => r.counts[ev.id]));
 
   return (
@@ -1754,7 +1725,7 @@ function SeasonStats({ matches, squad, onBack }) {
                     {ev.label}
                   </th>
                 ))}
-                <th className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>Total</th>
+                <th className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>Goles+Asistencias</th>
               </tr>
             </thead>
             <tbody>
@@ -1764,7 +1735,7 @@ function SeasonStats({ matches, squad, onBack }) {
                   {usedTypes.map((ev) => (
                     <td key={ev.id} className="text-center p-2">{r.counts[ev.id] || "–"}</td>
                   ))}
-                  <td className="text-center p-2 font-semibold">{r.total}</td>
+                  <td className="text-center p-2 font-semibold">{r.golesAsistencias}</td>
                 </tr>
               ))}
             </tbody>
