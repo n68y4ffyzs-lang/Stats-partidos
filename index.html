@@ -1078,7 +1078,58 @@ function MatchSummary({ match, onBack, onExport }) {
 /* ---------------------------------------------------------
    Pantalla: Estadísticas de temporada
 --------------------------------------------------------- */
+function StatCard({ label, value, sub }) {
+  return (
+    <div className="mp-card p-3">
+      <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>{label}</div>
+      <div className="display text-3xl font-semibold leading-none">{value}</div>
+      {sub && (
+        <div className="text-xs mt-1" style={{ color: "var(--chalk-dim)" }}>{sub}</div>
+      )}
+    </div>
+  );
+}
+
+function TeamTotals({ matches }) {
+  const totals = {};
+  matches.forEach((m) => {
+    m.events.forEach((e) => {
+      totals[e.type] = (totals[e.type] || 0) + 1;
+    });
+  });
+
+  const faltas = totals["falta_cometida"] || 0;
+  const tirosPuerta = totals["remate_puerta"] || 0;
+  const tirosFuera = totals["remate_fuera"] || 0;
+  const duelosGanados = totals["duelo_ganado"] || 0;
+  const duelosPerdidos = totals["duelo_perdido"] || 0;
+  const duelosTotales = duelosGanados + duelosPerdidos;
+  const duelosPct = duelosTotales === 0 ? null : Math.round((duelosGanados / duelosTotales) * 100);
+  const robos = totals["recuperacion"] || 0;
+  const paradas =
+    (totals["parada_area"] || 0) +
+    (totals["parada_fuera_area"] || 0) +
+    (totals["parada_area_pequena"] || 0);
+
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <StatCard label="Faltas totales" value={faltas} />
+      <StatCard label="Tiros a puerta" value={tirosPuerta} />
+      <StatCard label="Tiros fuera" value={tirosFuera} />
+      <StatCard
+        label="Duelos ganados"
+        value={duelosPct === null ? "–" : `${duelosPct}%`}
+        sub={duelosTotales === 0 ? "Sin duelos registrados" : `${duelosGanados} de ${duelosTotales}`}
+      />
+      <StatCard label="Robos totales" value={robos} />
+      <StatCard label="Paradas totales" value={paradas} />
+    </div>
+  );
+}
+
 function SeasonStats({ matches, onBack }) {
+  const [tab, setTab] = useState("jugadores");
+
   const stats = {};
   let matchesWithEvents = 0;
 
@@ -1111,10 +1162,29 @@ function SeasonStats({ matches, onBack }) {
         </div>
       </div>
 
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setTab("jugadores")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "jugadores" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Por jugador
+        </button>
+        <button
+          onClick={() => setTab("equipo")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "equipo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Totales del equipo
+        </button>
+      </div>
+
       {rows.length === 0 ? (
         <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
           Aún no hay eventos registrados en ningún partido.
         </div>
+      ) : tab === "equipo" ? (
+        <TeamTotals matches={matches} />
       ) : (
         <div className="mp-scroll overflow-x-auto">
           <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
