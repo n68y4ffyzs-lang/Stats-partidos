@@ -896,46 +896,89 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         >
           Estadísticas del partido
         </button>
+        <button
+          onClick={() => setTab("campo")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "campo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Campo
+        </button>
       </div>
+
+      {tab === "campo" && (
+        <FieldFormation match={match} playerById={playerById} onUpdate={onUpdate} />
+      )}
 
       {tab === "estadisticas" && (
         <React.Fragment>
-          <div className="mp-card p-3 mb-4">
-            <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Balón parado — córner</div>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <StatCard
-                label="Goles de córner a favor"
-                value={match.events.filter((e) => e.type === "gol_corner").length}
-              />
-              <StatCard
-                label="Goles de córner en contra"
-                value={(match.concededSetPieces || []).length}
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  const entry = { id: genId(), half: match.clock.activeHalf, minute: currentMinute() };
-                  onUpdate({ ...match, concededSetPieces: [...(match.concededSetPieces || []), entry] }, true);
-                }}
-                className="mp-btn mp-btn-outline px-3 py-2 text-sm flex-1"
-              >
-                + Gol encajado de córner
-              </button>
-              {(match.concededSetPieces || []).length > 0 && (
-                <button
-                  onClick={() => {
-                    const list = match.concededSetPieces || [];
-                    onUpdate({ ...match, concededSetPieces: list.slice(0, -1) }, true);
-                  }}
-                  className="mp-btn mp-btn-outline px-3 py-2 text-xs"
-                  style={{ color: "var(--crimson)" }}
-                >
-                  Deshacer
-                </button>
-              )}
-            </div>
-          </div>
+          {(() => {
+            const conceded = match.concededSetPieces || [];
+            const cornerConceded = conceded.filter((e) => (e.origin || "corner") === "corner").length;
+            const generalConceded = conceded.filter((e) => e.origin === "general").length;
+
+            function addConceded(origin) {
+              const entry = { id: genId(), origin, half: match.clock.activeHalf, minute: currentMinute() };
+              onUpdate({ ...match, concededSetPieces: [...conceded, entry] }, true);
+            }
+            function removeLastConceded(origin) {
+              const idxFromEnd = [...conceded].reverse().findIndex((e) => (e.origin || "corner") === origin);
+              if (idxFromEnd === -1) return;
+              const idx = conceded.length - 1 - idxFromEnd;
+              onUpdate(
+                { ...match, concededSetPieces: [...conceded.slice(0, idx), ...conceded.slice(idx + 1)] },
+                true
+              );
+            }
+
+            return (
+              <div className="mp-card p-3 mb-4">
+                <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Balón parado y goles encajados</div>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <StatCard
+                    label="Goles de córner a favor"
+                    value={match.events.filter((e) => e.type === "gol_corner").length}
+                  />
+                  <StatCard label="Encajados de córner" value={cornerConceded} />
+                  <StatCard label="Encajados en jugada" value={generalConceded} />
+                  <StatCard label="Encajados totales" value={cornerConceded + generalConceded} />
+                </div>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    onClick={() => addConceded("corner")}
+                    className="mp-btn mp-btn-outline px-3 py-2 text-xs flex-1"
+                  >
+                    + Encajado de córner
+                  </button>
+                  {cornerConceded > 0 && (
+                    <button
+                      onClick={() => removeLastConceded("corner")}
+                      className="mp-btn mp-btn-outline px-3 py-2 text-xs"
+                      style={{ color: "var(--crimson)" }}
+                    >
+                      Deshacer
+                    </button>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => addConceded("general")}
+                    className="mp-btn mp-btn-outline px-3 py-2 text-xs flex-1"
+                  >
+                    + Encajado en jugada
+                  </button>
+                  {generalConceded > 0 && (
+                    <button
+                      onClick={() => removeLastConceded("general")}
+                      className="mp-btn mp-btn-outline px-3 py-2 text-xs"
+                      style={{ color: "var(--crimson)" }}
+                    >
+                      Deshacer
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {match.events.length === 0 ? (
             <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
@@ -955,6 +998,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
             <PlayerStatsAccordion
               players={[...match.onPitch, ...match.bench].map((id) => playerById(id))}
               events={match.events}
+              concededGoals={(match.concededSetPieces || []).length}
             />
           )}
         </React.Fragment>
@@ -1084,6 +1128,162 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         </div>
       </div>
       )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Campo: colocar a cada jugador en su posición
+--------------------------------------------------------- */
+function FieldFormation({ match, playerById, onUpdate }) {
+  const [selectedId, setSelectedId] = useState(null);
+  const pitchRef = useRef(null);
+  const positions = match.positions || {};
+
+  const placedIds = match.onPitch.filter((id) => positions[id]);
+  const unplacedIds = match.onPitch.filter((id) => !positions[id]);
+
+  function setPosition(playerId, coords) {
+    onUpdate({ ...match, positions: { ...positions, [playerId]: coords } }, true);
+  }
+
+  function clearPosition(playerId) {
+    const next = { ...positions };
+    delete next[playerId];
+    onUpdate({ ...match, positions: next }, true);
+  }
+
+  function handlePitchClick(e) {
+    if (!selectedId || !pitchRef.current) return;
+    const rect = pitchRef.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setPosition(selectedId, {
+      x: Math.min(96, Math.max(4, x)),
+      y: Math.min(96, Math.max(4, y)),
+    });
+    setSelectedId(null);
+  }
+
+  return (
+    <div className="mb-4">
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        {selectedId
+          ? `Toca el campo para colocar a ${playerById(selectedId).name}`
+          : "Toca un jugador y luego el campo para colocarlo en su posición"}
+      </div>
+
+      <div
+        ref={pitchRef}
+        onClick={handlePitchClick}
+        className="relative w-full mx-auto mb-3"
+        style={{
+          maxWidth: 380,
+          aspectRatio: "68 / 100",
+          background: "#2E7D32",
+          borderRadius: 12,
+          border: "2px solid rgba(255,255,255,0.55)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 2, background: "rgba(255,255,255,0.55)" }} />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            width: "26%",
+            aspectRatio: "1 / 1",
+            marginLeft: "-13%",
+            marginTop: "-13%",
+            borderRadius: "50%",
+            border: "2px solid rgba(255,255,255,0.55)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            width: "60%",
+            height: "16%",
+            marginLeft: "-30%",
+            border: "2px solid rgba(255,255,255,0.55)",
+            borderTop: "none",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            bottom: 0,
+            width: "60%",
+            height: "16%",
+            marginLeft: "-30%",
+            border: "2px solid rgba(255,255,255,0.55)",
+            borderBottom: "none",
+          }}
+        />
+
+        {placedIds.map((id) => {
+          const p = playerById(id);
+          const pos = positions[id];
+          const selected = selectedId === id;
+          return (
+            <button
+              key={id}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedId(selected ? null : id);
+              }}
+              className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+              style={{
+                position: "absolute",
+                left: `${pos.x}%`,
+                top: `${pos.y}%`,
+                transform: "translate(-50%, -50%)",
+              }}
+            >
+              {p.number}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedId && (
+        <button
+          onClick={() => {
+            clearPosition(selectedId);
+            setSelectedId(null);
+          }}
+          className="mp-btn mp-btn-outline w-full py-2 text-xs mb-3"
+          style={{ color: "var(--crimson)" }}
+        >
+          Quitar del campo a {playerById(selectedId).name}
+        </button>
+      )}
+
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Sin colocar</div>
+      <div className="flex flex-wrap gap-2">
+        {unplacedIds.length === 0 && (
+          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Todos los jugadores en el campo están colocados.
+          </span>
+        )}
+        {unplacedIds.map((id) => {
+          const p = playerById(id);
+          const selected = selectedId === id;
+          return (
+            <button
+              key={id}
+              onClick={() => setSelectedId(selected ? null : id)}
+              className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+            >
+              {p.number}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1220,7 +1420,7 @@ function MatchTotals({ events }) {
   );
 }
 
-function PlayerStatsAccordion({ players, events }) {
+function PlayerStatsAccordion({ players, events, concededGoals = 0 }) {
   const [openId, setOpenId] = useState(null);
 
   function statsFor(playerId) {
@@ -1235,7 +1435,9 @@ function PlayerStatsAccordion({ players, events }) {
     const regatesTotales = regatesOk + regatesFallados;
     const regatesPct = regatesTotales === 0 ? null : Math.round((regatesOk / regatesTotales) * 100);
     const perdidas = count("perdida");
-    return { duelosGanados, duelosTotales, duelosPct, regatesOk, regatesTotales, regatesPct, perdidas };
+    const paradas = count("parada_area") + count("parada_fuera_area") + count("parada_area_pequena");
+    const despejes = count("despeje");
+    return { duelosGanados, duelosTotales, duelosPct, regatesOk, regatesTotales, regatesPct, perdidas, paradas, despejes };
   }
 
   if (players.length === 0) {
@@ -1289,6 +1491,22 @@ function PlayerStatsAccordion({ players, events }) {
                   <div>
                     <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Balones perdidos</div>
                     <div className="display text-xl font-semibold">{s.perdidas}</div>
+                  </div>
+                </div>
+              )}
+              {open && GOALKEEPER_NUMBERS.includes(String(p.number)) && (
+                <div className="px-3 pb-3 grid grid-cols-3 gap-2" style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}>
+                  <div className="pt-2">
+                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Paradas</div>
+                    <div className="display text-xl font-semibold">{s.paradas}</div>
+                  </div>
+                  <div className="pt-2">
+                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Despejes</div>
+                    <div className="display text-xl font-semibold">{s.despejes}</div>
+                  </div>
+                  <div className="pt-2">
+                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Goles encajados</div>
+                    <div className="display text-xl font-semibold">{concededGoals}</div>
                   </div>
                 </div>
               )}
@@ -1373,12 +1591,16 @@ function SeasonStats({ matches, onBack }) {
 /* ---------------------------------------------------------
    Pantalla: Balón parado
 --------------------------------------------------------- */
+function cornerConcededCount(match) {
+  return (match.concededSetPieces || []).filter((e) => (e.origin || "corner") === "corner").length;
+}
+
 function SetPieceStats({ matches, onBack }) {
   const favorTotal = matches.reduce(
     (sum, m) => sum + m.events.filter((e) => e.type === "gol_corner").length,
     0
   );
-  const contraTotal = matches.reduce((sum, m) => sum + (m.concededSetPieces || []).length, 0);
+  const contraTotal = matches.reduce((sum, m) => sum + cornerConcededCount(m), 0);
 
   const rows = matches
     .map((m) => ({
@@ -1386,7 +1608,7 @@ function SetPieceStats({ matches, onBack }) {
       opponent: m.opponent,
       date: m.date,
       favor: m.events.filter((e) => e.type === "gol_corner").length,
-      contra: (m.concededSetPieces || []).length,
+      contra: cornerConcededCount(m),
     }))
     .filter((r) => r.favor > 0 || r.contra > 0)
     .sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -1647,6 +1869,7 @@ function App() {
       events: [],
       subs: [],
       concededSetPieces: [],
+      positions: {},
     };
     const updatedList = [
       ...dataRef.current.matchesList,
