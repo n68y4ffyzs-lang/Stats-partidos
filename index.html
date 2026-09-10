@@ -59,6 +59,8 @@ function setStoredSupabaseConfig(url, key) {
 const EVENT_TYPES = [
   { id: "gol", label: "Gol", group: "ataque" },
   { id: "gol_corner", label: "Gol de córner", group: "ataque" },
+  { id: "gol_falta", label: "Gol de falta", group: "ataque" },
+  { id: "gol_penalti", label: "Gol de penalti", group: "ataque" },
   { id: "asistencia", label: "Asistencia", group: "ataque" },
   { id: "remate_puerta", label: "Remate a puerta", group: "ataque" },
   { id: "remate_fuera", label: "Remate fuera", group: "ataque" },
@@ -83,6 +85,10 @@ const EVENT_TYPES = [
 
 // Dorsales que se consideran de portero: al seleccionarlos aparecen los eventos del grupo "portero"
 const GOALKEEPER_NUMBERS = ["1", "13"];
+
+// Tipos de gol que cuentan como balón parado, y todos los tipos de gol (para el marcador y los porcentajes)
+const SET_PIECE_GOAL_TYPES = ["gol_corner", "gol_falta", "gol_penalti"];
+const ALL_GOAL_TYPES = ["gol", ...SET_PIECE_GOAL_TYPES];
 
 const GROUP_META = {
   ataque: { label: "Ataque", cls: "chip-turf" },
@@ -710,6 +716,10 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
     [squad]
   );
 
+  // Filtra jugadores que ya no están en la plantilla (p.ej. borrados después de convocarlos)
+  const rosterOnPitch = match.onPitch.filter((id) => squad.some((p) => p.id === id));
+  const rosterBench = match.bench.filter((id) => squad.some((p) => p.id === id));
+
   const clockKey = match.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
 
   function currentElapsed() {
@@ -831,8 +841,21 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
   const isGoalkeeperSelected = !!selectedPlayer && GOALKEEPER_NUMBERS.includes(String(selectedPlayer.number));
   const visibleEventTypes = EVENT_TYPES.filter((ev) => ev.group !== "portero" || isGoalkeeperSelected);
 
+  const golesFavor = match.events.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
+  const golesContra = (match.concededSetPieces || []).length;
+
   return (
     <div className="max-w-6xl mx-auto p-3 pb-8">
+      {/* Resultado del partido, bien visible arriba del todo */}
+      <div className="text-center pt-1 mb-1">
+        <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--chalk-dim)" }}>
+          Resultado
+        </div>
+        <div className="display text-4xl font-bold tabular-nums leading-none">
+          {golesFavor} - {golesContra}
+        </div>
+      </div>
+
       {/* Cabecera + marcador, todo en una franja compacta */}
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pt-2">
         <div className="flex items-center gap-3">
@@ -906,7 +929,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
       </div>
 
       {tab === "campo" && (
-        <FieldFormation match={match} playerById={playerById} onUpdate={onUpdate} currentMinute={currentMinute} />
+        <FieldFormation match={match} squad={squad} playerById={playerById} onUpdate={onUpdate} currentMinute={currentMinute} />
       )}
 
       {tab === "estadisticas" && (
@@ -996,7 +1019,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
           </button>
           {showPlayerStats && (
             <PlayerStatsAccordion
-              players={[...match.onPitch, ...match.bench].map((id) => playerById(id))}
+              players={[...rosterOnPitch, ...rosterBench].map((id) => playerById(id))}
               events={match.events}
               concededGoals={(match.concededSetPieces || []).length}
             />
@@ -1012,7 +1035,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
             En el campo — toca para seleccionar
           </div>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-1 lg:gap-1.5">
-            {match.onPitch.map((id) => {
+            {rosterOnPitch.map((id) => {
               const p = playerById(id);
               const selected = selectedPlayerId === id;
               return (
@@ -1052,7 +1075,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                 Entra por <span className="font-semibold">{playerById(subOutId).name}</span>:
               </div>
               <div className="flex flex-wrap gap-2 mb-2">
-                {match.bench.map((id) => {
+                {rosterBench.map((id) => {
                   const p = playerById(id);
                   return (
                     <button
@@ -1064,7 +1087,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                     </button>
                   );
                 })}
-                {match.bench.length === 0 && (
+                {rosterBench.length === 0 && (
                   <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes disponibles.</span>
                 )}
               </div>
@@ -1135,14 +1158,17 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
 /* ---------------------------------------------------------
    Campo: colocar a cada jugador en su posición
 --------------------------------------------------------- */
-function FieldFormation({ match, playerById, onUpdate, currentMinute }) {
+function FieldFormation({ match, squad, playerById, onUpdate, currentMinute }) {
   const [selectedId, setSelectedId] = useState(null);
   const pitchRef = useRef(null);
   const positions = match.positions || {};
 
-  const placedIds = match.onPitch.filter((id) => positions[id]);
-  const unplacedIds = match.onPitch.filter((id) => !positions[id]);
-  const selectedIsBench = !!selectedId && match.bench.includes(selectedId);
+  const rosterOnPitch = match.onPitch.filter((id) => squad.some((p) => p.id === id));
+  const rosterBench = match.bench.filter((id) => squad.some((p) => p.id === id));
+
+  const placedIds = rosterOnPitch.filter((id) => positions[id]);
+  const unplacedIds = rosterOnPitch.filter((id) => !positions[id]);
+  const selectedIsBench = !!selectedId && rosterBench.includes(selectedId);
 
   function setPosition(playerId, coords) {
     onUpdate({ ...match, positions: { ...positions, [playerId]: coords } }, true);
@@ -1192,7 +1218,7 @@ function FieldFormation({ match, playerById, onUpdate, currentMinute }) {
       setSelectedId(null);
       return;
     }
-    const tappedIsBench = match.bench.includes(id);
+    const tappedIsBench = rosterBench.includes(id);
     if (selectedIsBench !== tappedIsBench) {
       const inId = selectedIsBench ? selectedId : id;
       const outId = selectedIsBench ? id : selectedId;
@@ -1341,10 +1367,10 @@ function FieldFormation({ match, playerById, onUpdate, currentMinute }) {
         Banquillo — toca un suplente y luego a quién sustituye
       </div>
       <div className="flex flex-wrap gap-2">
-        {match.bench.length === 0 && (
+        {rosterBench.length === 0 && (
           <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes disponibles.</span>
         )}
-        {match.bench.map((id) => {
+        {rosterBench.map((id) => {
           const p = playerById(id);
           const selected = selectedId === id;
           return (
@@ -1674,10 +1700,16 @@ function cornerConcededCount(match) {
 }
 
 function SetPieceStats({ matches, onBack }) {
-  const favorTotal = matches.reduce(
-    (sum, m) => sum + m.events.filter((e) => e.type === "gol_corner").length,
-    0
-  );
+  const allEvents = matches.flatMap((m) => m.events);
+  const countType = (type) => allEvents.filter((e) => e.type === type).length;
+
+  const cornerFavor = countType("gol_corner");
+  const faltaFavor = countType("gol_falta");
+  const penaltiFavor = countType("gol_penalti");
+  const setPieceFavorTotal = cornerFavor + faltaFavor + penaltiFavor;
+  const totalGoals = allEvents.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
+  const setPiecePct = totalGoals === 0 ? null : Math.round((setPieceFavorTotal / totalGoals) * 100);
+
   const contraTotal = matches.reduce((sum, m) => sum + cornerConcededCount(m), 0);
 
   const rows = matches
@@ -1685,7 +1717,7 @@ function SetPieceStats({ matches, onBack }) {
       id: m.id,
       opponent: m.opponent,
       date: m.date,
-      favor: m.events.filter((e) => e.type === "gol_corner").length,
+      favor: m.events.filter((e) => SET_PIECE_GOAL_TYPES.includes(e.type)).length,
       contra: cornerConcededCount(m),
     }))
     .filter((r) => r.favor > 0 || r.contra > 0)
@@ -1701,7 +1733,15 @@ function SetPieceStats({ matches, onBack }) {
       </div>
 
       <div className="grid grid-cols-2 gap-2 mb-5">
-        <StatCard label="Goles de córner anotados" value={favorTotal} />
+        <StatCard label="Goles de córner" value={cornerFavor} />
+        <StatCard label="Goles de falta" value={faltaFavor} />
+        <StatCard label="Goles de penalti" value={penaltiFavor} />
+        <StatCard label="Total a balón parado" value={setPieceFavorTotal} />
+        <StatCard
+          label="% de los goles totales"
+          value={setPiecePct === null ? "–" : `${setPiecePct}%`}
+          sub={totalGoals === 0 ? "Sin goles registrados" : `${setPieceFavorTotal} de ${totalGoals} goles`}
+        />
         <StatCard label="Goles de córner encajados" value={contraTotal} />
       </div>
 
@@ -1711,7 +1751,7 @@ function SetPieceStats({ matches, onBack }) {
 
       {rows.length === 0 ? (
         <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-          Aún no hay goles de córner registrados en ningún partido.
+          Aún no hay goles a balón parado registrados en ningún partido.
         </div>
       ) : (
         <div className="flex flex-col gap-2">
