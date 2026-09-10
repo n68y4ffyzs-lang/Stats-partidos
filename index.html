@@ -58,6 +58,7 @@ function setStoredSupabaseConfig(url, key) {
 --------------------------------------------------------- */
 const EVENT_TYPES = [
   { id: "gol", label: "Gol", group: "ataque" },
+  { id: "gol_corner", label: "Gol de córner", group: "ataque" },
   { id: "asistencia", label: "Asistencia", group: "ataque" },
   { id: "remate_puerta", label: "Remate a puerta", group: "ataque" },
   { id: "remate_fuera", label: "Remate fuera", group: "ataque" },
@@ -397,7 +398,7 @@ function SyncSettings({
 /* ---------------------------------------------------------
    Pantalla: Inicio
 --------------------------------------------------------- */
-function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGoSeason, squadCount, syncStatus, onGoSync }) {
+function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGoSeason, onGoSetPieces, squadCount, syncStatus, onGoSync }) {
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-3 pt-2">
@@ -425,9 +426,16 @@ function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGo
 
       <button
         onClick={onGoSeason}
-        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-6"
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-2"
       >
         Estadísticas de temporada
+      </button>
+
+      <button
+        onClick={onGoSetPieces}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-6"
+      >
+        Balón parado
       </button>
 
       <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
@@ -887,13 +895,52 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
       </div>
 
       {tab === "estadisticas" && (
-        match.events.length === 0 ? (
-          <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-            Aún no hay eventos registrados en este partido.
+        <React.Fragment>
+          <div className="mp-card p-3 mb-4">
+            <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Balón parado — córner</div>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <StatCard
+                label="Goles de córner a favor"
+                value={match.events.filter((e) => e.type === "gol_corner").length}
+              />
+              <StatCard
+                label="Goles de córner en contra"
+                value={(match.concededSetPieces || []).length}
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  const entry = { id: genId(), half: match.clock.activeHalf, minute: currentMinute() };
+                  onUpdate({ ...match, concededSetPieces: [...(match.concededSetPieces || []), entry] }, true);
+                }}
+                className="mp-btn mp-btn-outline px-3 py-2 text-sm flex-1"
+              >
+                + Gol encajado de córner
+              </button>
+              {(match.concededSetPieces || []).length > 0 && (
+                <button
+                  onClick={() => {
+                    const list = match.concededSetPieces || [];
+                    onUpdate({ ...match, concededSetPieces: list.slice(0, -1) }, true);
+                  }}
+                  className="mp-btn mp-btn-outline px-3 py-2 text-xs"
+                  style={{ color: "var(--crimson)" }}
+                >
+                  Deshacer
+                </button>
+              )}
+            </div>
           </div>
-        ) : (
-          <MatchTotals events={match.events} />
-        )
+
+          {match.events.length === 0 ? (
+            <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+              Aún no hay eventos registrados en este partido.
+            </div>
+          ) : (
+            <MatchTotals events={match.events} />
+          )}
+        </React.Fragment>
       )}
 
       {/* Layout horizontal: en el campo a la izquierda, eventos + cronología a la derecha */}
@@ -1228,6 +1275,69 @@ function SeasonStats({ matches, onBack }) {
 }
 
 /* ---------------------------------------------------------
+   Pantalla: Balón parado
+--------------------------------------------------------- */
+function SetPieceStats({ matches, onBack }) {
+  const favorTotal = matches.reduce(
+    (sum, m) => sum + m.events.filter((e) => e.type === "gol_corner").length,
+    0
+  );
+  const contraTotal = matches.reduce((sum, m) => sum + (m.concededSetPieces || []).length, 0);
+
+  const rows = matches
+    .map((m) => ({
+      id: m.id,
+      opponent: m.opponent,
+      date: m.date,
+      favor: m.events.filter((e) => e.type === "gol_corner").length,
+      contra: (m.concededSetPieces || []).length,
+    }))
+    .filter((r) => r.favor > 0 || r.contra > 0)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-4 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <h1 className="display text-2xl font-semibold">Balón parado</h1>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-5">
+        <StatCard label="Goles de córner anotados" value={favorTotal} />
+        <StatCard label="Goles de córner encajados" value={contraTotal} />
+      </div>
+
+      <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
+        Por partido
+      </h2>
+
+      {rows.length === 0 ? (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          Aún no hay goles de córner registrados en ningún partido.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {rows.map((r) => (
+            <div key={r.id} className="mp-card p-3 flex items-center justify-between">
+              <div>
+                <div className="font-semibold">vs {r.opponent}</div>
+                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{r.date}</div>
+              </div>
+              <div className="text-sm text-right">
+                <div style={{ color: "var(--turf)" }}>{r.favor} a favor</div>
+                <div style={{ color: "var(--crimson)" }}>{r.contra} en contra</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    App principal
 --------------------------------------------------------- */
 function App() {
@@ -1440,6 +1550,7 @@ function App() {
       bench,
       events: [],
       subs: [],
+      concededSetPieces: [],
     };
     const updatedList = [
       ...dataRef.current.matchesList,
@@ -1534,6 +1645,7 @@ function App() {
           onDeleteMatch={deleteMatch}
           onGoSquad={() => setView("squad")}
           onGoSeason={() => setView("season")}
+          onGoSetPieces={() => setView("setpieces")}
           syncStatus={syncStatus}
           onGoSync={() => setView("sync")}
         />
@@ -1563,6 +1675,9 @@ function App() {
       )}
       {view === "season" && (
         <SeasonStats matches={Object.values(data.matchesById)} onBack={goHome} />
+      )}
+      {view === "setpieces" && (
+        <SetPieceStats matches={Object.values(data.matchesById)} onBack={goHome} />
       )}
       {view === "sync" && (
         <SyncSettings
