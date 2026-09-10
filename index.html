@@ -81,6 +81,7 @@ const EVENT_TYPES = [
   { id: "parada_fuera_area", label: "Parada fuera del área", group: "portero" },
   { id: "parada_area_pequena", label: "Parada área pequeña", group: "portero" },
   { id: "despeje", label: "Despeje", group: "portero" },
+  { id: "gol_encajado", label: "Gol encajado", group: "portero" },
 ];
 
 // Dorsales que se consideran de portero: al seleccionarlos aparecen los eventos del grupo "portero"
@@ -842,7 +843,8 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
   const visibleEventTypes = EVENT_TYPES.filter((ev) => ev.group !== "portero" || isGoalkeeperSelected);
 
   const golesFavor = match.events.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
-  const golesContra = (match.concededSetPieces || []).length;
+  const golesContra =
+    (match.concededSetPieces || []).length + match.events.filter((e) => e.type === "gol_encajado").length;
 
   return (
     <div className="max-w-6xl mx-auto p-3 pb-8">
@@ -937,7 +939,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
           {(() => {
             const conceded = match.concededSetPieces || [];
             const cornerConceded = conceded.filter((e) => (e.origin || "corner") === "corner").length;
-            const generalConceded = conceded.filter((e) => e.origin === "general").length;
+            const golEncajadoEventos = match.events.filter((e) => e.type === "gol_encajado").length;
 
             function addConceded(origin) {
               const entry = { id: genId(), origin, half: match.clock.activeHalf, minute: currentMinute() };
@@ -962,10 +964,14 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                     value={match.events.filter((e) => e.type === "gol_corner").length}
                   />
                   <StatCard label="Encajados de córner" value={cornerConceded} />
-                  <StatCard label="Encajados en jugada" value={generalConceded} />
-                  <StatCard label="Encajados totales" value={cornerConceded + generalConceded} />
+                  <StatCard
+                    label="Encajados en jugada"
+                    value={golEncajadoEventos}
+                    sub="Evento «Gol encajado» del portero"
+                  />
+                  <StatCard label="Encajados totales" value={cornerConceded + golEncajadoEventos} />
                 </div>
-                <div className="flex gap-2 mb-2">
+                <div className="flex gap-2">
                   <button
                     onClick={() => addConceded("corner")}
                     className="mp-btn mp-btn-outline px-3 py-2 text-xs flex-1"
@@ -975,23 +981,6 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                   {cornerConceded > 0 && (
                     <button
                       onClick={() => removeLastConceded("corner")}
-                      className="mp-btn mp-btn-outline px-3 py-2 text-xs"
-                      style={{ color: "var(--crimson)" }}
-                    >
-                      Deshacer
-                    </button>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => addConceded("general")}
-                    className="mp-btn mp-btn-outline px-3 py-2 text-xs flex-1"
-                  >
-                    + Encajado en jugada
-                  </button>
-                  {generalConceded > 0 && (
-                    <button
-                      onClick={() => removeLastConceded("general")}
                       className="mp-btn mp-btn-outline px-3 py-2 text-xs"
                       style={{ color: "var(--crimson)" }}
                     >
@@ -1021,7 +1010,6 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
             <PlayerStatsAccordion
               players={[...rosterOnPitch, ...rosterBench].map((id) => playerById(id))}
               events={match.events}
-              concededGoals={(match.concededSetPieces || []).length}
             />
           )}
         </React.Fragment>
@@ -1524,25 +1512,45 @@ function MatchTotals({ events }) {
   );
 }
 
-function PlayerStatsAccordion({ players, events, concededGoals = 0 }) {
-  const [openId, setOpenId] = useState(null);
+function computePlayerStats(playerId, events) {
+  const own = events.filter((e) => e.playerId === playerId);
+  const count = (type) => own.filter((e) => e.type === type).length;
+  const duelosGanados = count("duelo_ganado") + count("duelo_general_ganado");
+  const duelosPerdidos = count("duelo_perdido") + count("duelo_general_perdido");
+  const duelosTotales = duelosGanados + duelosPerdidos;
+  const duelosPct = duelosTotales === 0 ? null : Math.round((duelosGanados / duelosTotales) * 100);
+  const regatesOk = count("regate");
+  const regatesFallados = count("regate_fallado");
+  const regatesTotales = regatesOk + regatesFallados;
+  const regatesPct = regatesTotales === 0 ? null : Math.round((regatesOk / regatesTotales) * 100);
+  const perdidas = count("perdida");
+  const robos = count("recuperacion");
+  const goles = ALL_GOAL_TYPES.reduce((sum, t) => sum + count(t), 0);
+  const asistencias = count("asistencia");
+  const paradas = count("parada_area") + count("parada_fuera_area") + count("parada_area_pequena");
+  const despejes = count("despeje");
+  const golesEncajados = count("gol_encajado");
+  return {
+    duelosGanados,
+    duelosPerdidos,
+    duelosTotales,
+    duelosPct,
+    regatesOk,
+    regatesFallados,
+    regatesTotales,
+    regatesPct,
+    perdidas,
+    robos,
+    goles,
+    asistencias,
+    paradas,
+    despejes,
+    golesEncajados,
+  };
+}
 
-  function statsFor(playerId) {
-    const own = events.filter((e) => e.playerId === playerId);
-    const count = (type) => own.filter((e) => e.type === type).length;
-    const duelosGanados = count("duelo_ganado") + count("duelo_general_ganado");
-    const duelosPerdidos = count("duelo_perdido") + count("duelo_general_perdido");
-    const duelosTotales = duelosGanados + duelosPerdidos;
-    const duelosPct = duelosTotales === 0 ? null : Math.round((duelosGanados / duelosTotales) * 100);
-    const regatesOk = count("regate");
-    const regatesFallados = count("regate_fallado");
-    const regatesTotales = regatesOk + regatesFallados;
-    const regatesPct = regatesTotales === 0 ? null : Math.round((regatesOk / regatesTotales) * 100);
-    const perdidas = count("perdida");
-    const paradas = count("parada_area") + count("parada_fuera_area") + count("parada_area_pequena");
-    const despejes = count("despeje");
-    return { duelosGanados, duelosTotales, duelosPct, regatesOk, regatesTotales, regatesPct, perdidas, paradas, despejes };
-  }
+function PlayerStatsAccordion({ players, events }) {
+  const [openId, setOpenId] = useState(null);
 
   if (players.length === 0) {
     return (
@@ -1559,7 +1567,7 @@ function PlayerStatsAccordion({ players, events, concededGoals = 0 }) {
         .sort((a, b) => Number(a.number) - Number(b.number))
         .map((p) => {
           const open = openId === p.id;
-          const s = statsFor(p.id);
+          const s = computePlayerStats(p.id, events);
           return (
             <div key={p.id} className="mp-card overflow-hidden">
               <button
@@ -1610,7 +1618,7 @@ function PlayerStatsAccordion({ players, events, concededGoals = 0 }) {
                   </div>
                   <div className="pt-2">
                     <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Goles encajados</div>
-                    <div className="display text-xl font-semibold">{concededGoals}</div>
+                    <div className="display text-xl font-semibold">{s.golesEncajados}</div>
                   </div>
                 </div>
               )}
@@ -1621,7 +1629,82 @@ function PlayerStatsAccordion({ players, events, concededGoals = 0 }) {
   );
 }
 
-function SeasonStats({ matches, onBack }) {
+/* ---------------------------------------------------------
+   Gráfico de barras horizontal, una métrica por jugador
+--------------------------------------------------------- */
+function PlayerBarChart({ title, color, rows }) {
+  if (rows.length === 0) return null;
+  const max = Math.max(...rows.map((r) => r.raw));
+
+  return (
+    <div className="mp-card p-3">
+      <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>{title}</div>
+      <div className="flex flex-col gap-1.5">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center gap-2">
+            <div className="text-xs w-20 shrink-0 truncate">{r.label}</div>
+            <div className="flex-1 h-3 rounded-full" style={{ background: "rgba(244,241,232,0.08)" }}>
+              <div
+                className="h-3 rounded-full"
+                style={{ width: `${max === 0 ? 0 : (r.raw / max) * 100}%`, background: color }}
+              />
+            </div>
+            <div className="text-xs w-9 text-right shrink-0" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {r.display}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlayerStatsCharts({ players, events }) {
+  const withStats = players.map((p) => ({ p, s: computePlayerStats(p.id, events) }));
+
+  function rowsFor(pick, format) {
+    return withStats
+      .map(({ p, s }) => {
+        const raw = pick(s) || 0;
+        return { label: p.name, raw, display: format ? format(raw) : String(raw) };
+      })
+      .filter((r) => r.raw > 0)
+      .sort((a, b) => b.raw - a.raw);
+  }
+
+  const charts = [
+    { title: "Goles", color: "var(--turf)", rows: rowsFor((s) => s.goles) },
+    { title: "Asistencias", color: "var(--turf)", rows: rowsFor((s) => s.asistencias) },
+    { title: "Duelos ganados", color: "var(--cielo)", rows: rowsFor((s) => s.duelosPct, (v) => `${v}%`) },
+    { title: "Regates acertados", color: "var(--cielo)", rows: rowsFor((s) => s.regatesPct, (v) => `${v}%`) },
+    { title: "Recuperaciones", color: "var(--cielo)", rows: rowsFor((s) => s.robos) },
+    { title: "Balones perdidos", color: "var(--crimson)", rows: rowsFor((s) => s.perdidas) },
+    { title: "Paradas (portero)", color: "var(--violet)", rows: rowsFor((s) => s.paradas) },
+    { title: "Goles encajados (portero)", color: "var(--crimson)", rows: rowsFor((s) => s.golesEncajados) },
+  ].filter((c) => c.rows.length > 0);
+
+  if (charts.length === 0) {
+    return (
+      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+        Aún no hay suficientes eventos registrados para mostrar gráficos.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {charts.map((c) => (
+        <PlayerBarChart key={c.title} title={c.title} color={c.color} rows={c.rows} />
+      ))}
+    </div>
+  );
+}
+
+function SeasonStats({ matches, squad, onBack }) {
+  const [showPlayerStats, setShowPlayerStats] = useState(false);
+  const [showCharts, setShowCharts] = useState(false);
+  const allSeasonEvents = matches.flatMap((m) => m.events);
+
   const stats = {};
   let matchesWithEvents = 0;
 
@@ -1687,6 +1770,26 @@ function SeasonStats({ matches, onBack }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      <button
+        onClick={() => setShowPlayerStats((v) => !v)}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mt-4 mb-2"
+      >
+        {showPlayerStats ? "Ocultar estadísticas por jugador" : "Ver estadísticas por jugador"}
+      </button>
+      {showPlayerStats && (
+        <React.Fragment>
+          <PlayerStatsAccordion players={squad} events={allSeasonEvents} />
+
+          <button
+            onClick={() => setShowCharts((v) => !v)}
+            className="mp-btn mp-btn-outline w-full py-2.5 text-sm mt-3 mb-2"
+          >
+            {showCharts ? "Ocultar gráficos" : "Ver gráficos"}
+          </button>
+          {showCharts && <PlayerStatsCharts players={squad} events={allSeasonEvents} />}
+        </React.Fragment>
       )}
     </div>
   );
@@ -2111,7 +2214,7 @@ function App() {
         <MatchSummary match={match} onBack={goHome} onExport={exportCSV} />
       )}
       {view === "season" && (
-        <SeasonStats matches={Object.values(data.matchesById)} onBack={goHome} />
+        <SeasonStats matches={Object.values(data.matchesById)} squad={data.squad} onBack={goHome} />
       )}
       {view === "setpieces" && (
         <SetPieceStats matches={Object.values(data.matchesById)} onBack={goHome} />
