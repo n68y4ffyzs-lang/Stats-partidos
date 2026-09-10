@@ -906,7 +906,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
       </div>
 
       {tab === "campo" && (
-        <FieldFormation match={match} playerById={playerById} onUpdate={onUpdate} />
+        <FieldFormation match={match} playerById={playerById} onUpdate={onUpdate} currentMinute={currentMinute} />
       )}
 
       {tab === "estadisticas" && (
@@ -1135,13 +1135,14 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
 /* ---------------------------------------------------------
    Campo: colocar a cada jugador en su posición
 --------------------------------------------------------- */
-function FieldFormation({ match, playerById, onUpdate }) {
+function FieldFormation({ match, playerById, onUpdate, currentMinute }) {
   const [selectedId, setSelectedId] = useState(null);
   const pitchRef = useRef(null);
   const positions = match.positions || {};
 
   const placedIds = match.onPitch.filter((id) => positions[id]);
   const unplacedIds = match.onPitch.filter((id) => !positions[id]);
+  const selectedIsBench = !!selectedId && match.bench.includes(selectedId);
 
   function setPosition(playerId, coords) {
     onUpdate({ ...match, positions: { ...positions, [playerId]: coords } }, true);
@@ -1153,8 +1154,57 @@ function FieldFormation({ match, playerById, onUpdate }) {
     onUpdate({ ...match, positions: next }, true);
   }
 
+  function substitute(outId, inId) {
+    const outP = playerById(outId);
+    const inP = playerById(inId);
+    const half = match.clock.activeHalf;
+    const minute = currentMinute();
+    const newOnPitch = match.onPitch.map((id) => (id === outId ? inId : id));
+    const newBench = match.bench.map((id) => (id === inId ? outId : id));
+    const subEntry = {
+      id: genId(),
+      half,
+      minute,
+      outId: outP.id,
+      outName: outP.name,
+      outNumber: outP.number,
+      inId: inP.id,
+      inName: inP.name,
+      inNumber: inP.number,
+    };
+    const nextPositions = { ...positions };
+    if (nextPositions[outId]) {
+      nextPositions[inId] = nextPositions[outId];
+    }
+    delete nextPositions[outId];
+    onUpdate(
+      { ...match, onPitch: newOnPitch, bench: newBench, subs: [...match.subs, subEntry], positions: nextPositions },
+      true
+    );
+  }
+
+  function handleSelect(id) {
+    if (!selectedId) {
+      setSelectedId(id);
+      return;
+    }
+    if (selectedId === id) {
+      setSelectedId(null);
+      return;
+    }
+    const tappedIsBench = match.bench.includes(id);
+    if (selectedIsBench !== tappedIsBench) {
+      const inId = selectedIsBench ? selectedId : id;
+      const outId = selectedIsBench ? id : selectedId;
+      substitute(outId, inId);
+      setSelectedId(null);
+    } else {
+      setSelectedId(id);
+    }
+  }
+
   function handlePitchClick(e) {
-    if (!selectedId || !pitchRef.current) return;
+    if (!selectedId || selectedIsBench || !pitchRef.current) return;
     const rect = pitchRef.current.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
@@ -1169,8 +1219,10 @@ function FieldFormation({ match, playerById, onUpdate }) {
     <div className="mb-4">
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
         {selectedId
-          ? `Toca el campo para colocar a ${playerById(selectedId).name}`
-          : "Toca un jugador y luego el campo para colocarlo en su posición"}
+          ? selectedIsBench
+            ? `Toca al jugador del campo que sale por ${playerById(selectedId).name}`
+            : `Toca el campo para colocar a ${playerById(selectedId).name}, o un suplente para cambiarlo`
+          : "Toca un jugador y luego el campo para colocarlo, o toca un suplente para hacer un cambio"}
       </div>
 
       <div
@@ -1234,7 +1286,7 @@ function FieldFormation({ match, playerById, onUpdate }) {
               key={id}
               onClick={(e) => {
                 e.stopPropagation();
-                setSelectedId(selected ? null : id);
+                handleSelect(id);
               }}
               className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
               style={{
@@ -1250,7 +1302,7 @@ function FieldFormation({ match, playerById, onUpdate }) {
         })}
       </div>
 
-      {selectedId && (
+      {selectedId && !selectedIsBench && (
         <button
           onClick={() => {
             clearPosition(selectedId);
@@ -1264,7 +1316,7 @@ function FieldFormation({ match, playerById, onUpdate }) {
       )}
 
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Sin colocar</div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 mb-4">
         {unplacedIds.length === 0 && (
           <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
             Todos los jugadores en el campo están colocados.
@@ -1276,11 +1328,37 @@ function FieldFormation({ match, playerById, onUpdate }) {
           return (
             <button
               key={id}
-              onClick={() => setSelectedId(selected ? null : id)}
+              onClick={() => handleSelect(id)}
               className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
             >
               {p.number}
             </button>
+          );
+        })}
+      </div>
+
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        Banquillo — toca un suplente y luego a quién sustituye
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {match.bench.length === 0 && (
+          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes disponibles.</span>
+        )}
+        {match.bench.map((id) => {
+          const p = playerById(id);
+          const selected = selectedId === id;
+          return (
+            <div key={id} className="flex flex-col items-center gap-1" style={{ width: 56 }}>
+              <button
+                onClick={() => handleSelect(id)}
+                className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+              >
+                {p.number}
+              </button>
+              <span className="text-[10px] text-center leading-tight" style={{ color: "var(--chalk-dim)" }}>
+                {p.name.split(" ")[0]}
+              </span>
+            </div>
           );
         })}
       </div>
