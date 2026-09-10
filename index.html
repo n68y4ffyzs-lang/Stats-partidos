@@ -1430,6 +1430,8 @@ function MatchTotals({ events }) {
   const faltas = totals["falta_cometida"] || 0;
   const tirosPuerta = totals["remate_puerta"] || 0;
   const tirosFuera = totals["remate_fuera"] || 0;
+  const tirosTotales = tirosPuerta + tirosFuera;
+  const tirosPuertaPct = tirosTotales === 0 ? null : Math.round((tirosPuerta / tirosTotales) * 100);
   const duelosGanados = (totals["duelo_ganado"] || 0) + (totals["duelo_general_ganado"] || 0);
   const duelosPerdidos = (totals["duelo_perdido"] || 0) + (totals["duelo_general_perdido"] || 0);
   const duelosTotales = duelosGanados + duelosPerdidos;
@@ -1443,8 +1445,11 @@ function MatchTotals({ events }) {
   return (
     <div className="grid grid-cols-2 gap-2">
       <StatCard label="Faltas totales" value={faltas} />
-      <StatCard label="Tiros a puerta" value={tirosPuerta} />
-      <StatCard label="Tiros fuera" value={tirosFuera} />
+      <StatCard
+        label="Tiros a puerta"
+        value={tirosPuertaPct === null ? "–" : `${tirosPuertaPct}%`}
+        sub={tirosTotales === 0 ? "Sin tiros registrados" : `${tirosPuerta} de ${tirosTotales}`}
+      />
       <StatCard
         label="Duelos ganados"
         value={duelosPct === null ? "–" : `${duelosPct}%`}
@@ -1467,6 +1472,10 @@ function computePlayerStats(playerId, events) {
   const regatesFallados = count("regate_fallado");
   const regatesTotales = regatesOk + regatesFallados;
   const regatesPct = regatesTotales === 0 ? null : Math.round((regatesOk / regatesTotales) * 100);
+  const tirosPuerta = count("remate_puerta");
+  const tirosFuera = count("remate_fuera");
+  const tirosTotales = tirosPuerta + tirosFuera;
+  const tirosPuertaPct = tirosTotales === 0 ? null : Math.round((tirosPuerta / tirosTotales) * 100);
   const perdidas = count("perdida");
   const robos = count("recuperacion");
   const goles = ALL_GOAL_TYPES.reduce((sum, t) => sum + count(t), 0);
@@ -1483,6 +1492,10 @@ function computePlayerStats(playerId, events) {
     regatesFallados,
     regatesTotales,
     regatesPct,
+    tirosPuerta,
+    tirosFuera,
+    tirosTotales,
+    tirosPuertaPct,
     perdidas,
     robos,
     goles,
@@ -1525,44 +1538,62 @@ function PlayerStatsAccordion({ players, events }) {
                 <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
               </button>
               {open && (
-                <div className="px-3 pb-3 grid grid-cols-3 gap-2">
-                  <div>
-                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Duelos ganados</div>
-                    <div className="display text-xl font-semibold">
+                <div className="px-3 pb-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Duelos ganados</span>
+                    <span className="text-sm font-semibold">
                       {s.duelosPct === null ? "–" : `${s.duelosPct}%`}
-                    </div>
-                    <div className="text-[11px]" style={{ color: "var(--chalk-dim)" }}>
-                      {s.duelosTotales === 0 ? "Sin duelos" : `${s.duelosGanados} de ${s.duelosTotales}`}
-                    </div>
+                      {s.duelosTotales > 0 && (
+                        <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                          ({s.duelosGanados} de {s.duelosTotales})
+                        </span>
+                      )}
+                    </span>
                   </div>
-                  <div>
-                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Regates acertados</div>
-                    <div className="display text-xl font-semibold">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Regates acertados</span>
+                    <span className="text-sm font-semibold">
                       {s.regatesPct === null ? "–" : `${s.regatesPct}%`}
-                    </div>
-                    <div className="text-[11px]" style={{ color: "var(--chalk-dim)" }}>
-                      {s.regatesTotales === 0 ? "Sin regates" : `${s.regatesOk} de ${s.regatesTotales}`}
-                    </div>
+                      {s.regatesTotales > 0 && (
+                        <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                          ({s.regatesOk} de {s.regatesTotales})
+                        </span>
+                      )}
+                    </span>
                   </div>
-                  <div>
-                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Balones perdidos</div>
-                    <div className="display text-xl font-semibold">{s.perdidas}</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Tiros a puerta</span>
+                    <span className="text-sm font-semibold">
+                      {s.tirosPuertaPct === null ? "–" : `${s.tirosPuertaPct}%`}
+                      {s.tirosTotales > 0 && (
+                        <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                          ({s.tirosPuerta} de {s.tirosTotales})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Balones perdidos</span>
+                    <span className="text-sm font-semibold">{s.perdidas}</span>
                   </div>
                 </div>
               )}
               {open && GOALKEEPER_NUMBERS.includes(String(p.number)) && (
-                <div className="px-3 pb-3 grid grid-cols-3 gap-2" style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}>
-                  <div className="pt-2">
-                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Paradas</div>
-                    <div className="display text-xl font-semibold">{s.paradas}</div>
+                <div
+                  className="px-3 pb-3 pt-2 flex flex-col gap-2"
+                  style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Paradas</span>
+                    <span className="text-sm font-semibold">{s.paradas}</span>
                   </div>
-                  <div className="pt-2">
-                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Despejes</div>
-                    <div className="display text-xl font-semibold">{s.despejes}</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Despejes</span>
+                    <span className="text-sm font-semibold">{s.despejes}</span>
                   </div>
-                  <div className="pt-2">
-                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Goles encajados</div>
-                    <div className="display text-xl font-semibold">{s.golesEncajados}</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Goles encajados</span>
+                    <span className="text-sm font-semibold">{s.golesEncajados}</span>
                   </div>
                 </div>
               )}
@@ -1576,9 +1607,9 @@ function PlayerStatsAccordion({ players, events }) {
                   const usedTypes = EVENT_TYPES.filter((ev) => counts[ev.id]);
                   if (usedTypes.length === 0) return null;
                   return (
-                    <div className="px-3 pb-3" style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}>
-                      <div className="text-xs pt-2 mb-1" style={{ color: "var(--chalk-dim)" }}>Todos los eventos</div>
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                    <div className="px-3 pb-3 pt-2" style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}>
+                      <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>Todos los eventos</div>
+                      <div className="flex flex-col gap-1">
                         {usedTypes.map((ev) => (
                           <div key={ev.id} className="flex items-center justify-between text-sm">
                             <span style={{ color: "var(--chalk-dim)" }}>{ev.label}</span>
@@ -1668,6 +1699,7 @@ function PlayerStatsCharts({ players, events }) {
 }
 
 function SeasonStats({ matches, squad, onBack }) {
+  const [showTeamStats, setShowTeamStats] = useState(false);
   const [showPlayerStats, setShowPlayerStats] = useState(false);
   const [showCharts, setShowCharts] = useState(false);
   const allSeasonEvents = matches.flatMap((m) => m.events);
@@ -1741,8 +1773,26 @@ function SeasonStats({ matches, squad, onBack }) {
       )}
 
       <button
-        onClick={() => setShowPlayerStats((v) => !v)}
+        onClick={() => setShowTeamStats((v) => !v)}
         className="mp-btn mp-btn-outline w-full py-2.5 text-sm mt-4 mb-2"
+      >
+        {showTeamStats ? "Ocultar estadísticas del equipo" : "Ver estadísticas del equipo"}
+      </button>
+      {showTeamStats && (
+        allSeasonEvents.length === 0 ? (
+          <div className="mp-card p-4 text-sm mb-2" style={{ color: "var(--chalk-dim)" }}>
+            Aún no hay eventos registrados en ningún partido.
+          </div>
+        ) : (
+          <div className="mb-2">
+            <MatchTotals events={allSeasonEvents} />
+          </div>
+        )
+      )}
+
+      <button
+        onClick={() => setShowPlayerStats((v) => !v)}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-2"
       >
         {showPlayerStats ? "Ocultar estadísticas por jugador" : "Ver estadísticas por jugador"}
       </button>
