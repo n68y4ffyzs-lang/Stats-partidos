@@ -393,7 +393,7 @@ function SyncSettings({
 /* ---------------------------------------------------------
    Pantalla: Inicio
 --------------------------------------------------------- */
-function Home({ matches, onNewMatch, onOpenMatch, onGoSquad, squadCount, syncStatus, onGoSync }) {
+function Home({ matches, onNewMatch, onOpenMatch, onGoSquad, onGoSeason, squadCount, syncStatus, onGoSync }) {
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-3 pt-2">
@@ -414,9 +414,16 @@ function Home({ matches, onNewMatch, onOpenMatch, onGoSquad, squadCount, syncSta
 
       <button
         onClick={onNewMatch}
-        className="mp-btn mp-btn-primary w-full py-4 text-lg font-semibold mb-6 display"
+        className="mp-btn mp-btn-primary w-full py-4 text-lg font-semibold mb-3 display"
       >
         Nuevo partido
+      </button>
+
+      <button
+        onClick={onGoSeason}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-6"
+      >
+        Estadísticas de temporada
       </button>
 
       <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
@@ -1014,6 +1021,78 @@ function MatchSummary({ match, onBack, onExport }) {
 }
 
 /* ---------------------------------------------------------
+   Pantalla: Estadísticas de temporada
+--------------------------------------------------------- */
+function SeasonStats({ matches, onBack }) {
+  const stats = {};
+  let matchesWithEvents = 0;
+
+  matches.forEach((m) => {
+    if (m.events.length > 0) matchesWithEvents += 1;
+    m.events.forEach((e) => {
+      if (!stats[e.playerId]) {
+        stats[e.playerId] = { number: e.playerNumber, name: e.playerName, counts: {}, total: 0 };
+      }
+      stats[e.playerId].counts[e.type] = (stats[e.playerId].counts[e.type] || 0) + 1;
+      stats[e.playerId].total += 1;
+    });
+  });
+
+  const rows = Object.values(stats).sort((a, b) => b.total - a.total);
+  const usedTypes = EVENT_TYPES.filter((ev) => rows.some((r) => r.counts[ev.id]));
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-4 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <div>
+          <h1 className="display text-2xl font-semibold">Estadísticas de temporada</h1>
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            {matches.length} partido{matches.length === 1 ? "" : "s"} registrado{matches.length === 1 ? "" : "s"}
+            {matchesWithEvents > 0 && ` · ${matchesWithEvents} con eventos`}
+          </div>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          Aún no hay eventos registrados en ningún partido.
+        </div>
+      ) : (
+        <div className="mp-scroll overflow-x-auto">
+          <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th className="text-left p-2" style={{ color: "var(--chalk-dim)" }}>Jugador</th>
+                {usedTypes.map((ev) => (
+                  <th key={ev.id} className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>
+                    {ev.label}
+                  </th>
+                ))}
+                <th className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.number + r.name} className="mp-card">
+                  <td className="p-2 whitespace-nowrap">#{r.number} {r.name}</td>
+                  {usedTypes.map((ev) => (
+                    <td key={ev.id} className="text-center p-2">{r.counts[ev.id] || "–"}</td>
+                  ))}
+                  <td className="text-center p-2 font-semibold">{r.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    App principal
 --------------------------------------------------------- */
 function App() {
@@ -1307,6 +1386,7 @@ function App() {
           onNewMatch={() => setView("setup")}
           onOpenMatch={openMatch}
           onGoSquad={() => setView("squad")}
+          onGoSeason={() => setView("season")}
           syncStatus={syncStatus}
           onGoSync={() => setView("sync")}
         />
@@ -1333,6 +1413,9 @@ function App() {
       )}
       {view === "summary" && match && (
         <MatchSummary match={match} onBack={goHome} onExport={exportCSV} />
+      )}
+      {view === "season" && (
+        <SeasonStats matches={Object.values(data.matchesById)} onBack={goHome} />
       )}
       {view === "sync" && (
         <SyncSettings
