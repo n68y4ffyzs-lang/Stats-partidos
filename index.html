@@ -387,7 +387,7 @@ function SyncSettings({
 /* ---------------------------------------------------------
    Pantalla: Inicio
 --------------------------------------------------------- */
-function Home({ matches, onNewMatch, onOpenMatch, onGoSquad, onGoSeason, squadCount, syncStatus, onGoSync }) {
+function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGoSeason, squadCount, syncStatus, onGoSync }) {
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-3 pt-2">
@@ -435,25 +435,33 @@ function Home({ matches, onNewMatch, onOpenMatch, onGoSquad, onGoSeason, squadCo
           .slice()
           .sort((a, b) => (a.date < b.date ? 1 : -1))
           .map((m) => (
-            <button
-              key={m.id}
-              onClick={() => onOpenMatch(m.id)}
-              className="mp-card p-3 text-left flex items-center justify-between"
-            >
-              <div>
-                <div className="font-semibold">vs {m.opponent}</div>
-                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
-              </div>
-              <span
-                className="text-xs px-2 py-1 rounded-full"
-                style={{
-                  background: m.finished ? "rgba(111,190,68,0.15)" : "rgba(227,167,45,0.18)",
-                  color: m.finished ? "var(--turf)" : "var(--amber)",
-                }}
+            <div key={m.id} className="mp-card p-3 flex items-center gap-2">
+              <button
+                onClick={() => onOpenMatch(m.id)}
+                className="flex-1 min-w-0 text-left flex items-center justify-between gap-2"
               >
-                {m.finished ? "Finalizado" : "En juego"}
-              </span>
-            </button>
+                <div className="min-w-0">
+                  <div className="font-semibold truncate">vs {m.opponent}</div>
+                  <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
+                </div>
+                <span
+                  className="text-xs px-2 py-1 rounded-full whitespace-nowrap"
+                  style={{
+                    background: m.finished ? "rgba(111,190,68,0.15)" : "rgba(227,167,45,0.18)",
+                    color: m.finished ? "var(--turf)" : "var(--amber)",
+                  }}
+                >
+                  {m.finished ? "Finalizado" : "En juego"}
+                </span>
+              </button>
+              <button
+                onClick={() => onDeleteMatch(m.id, m.opponent)}
+                className="text-xs px-2 py-1 shrink-0"
+                style={{ color: "var(--crimson)" }}
+              >
+                Eliminar
+              </button>
+            </div>
           ))}
       </div>
     </div>
@@ -1359,6 +1367,17 @@ function App() {
     setView(m.finished ? "summary" : "live");
   }
 
+  function deleteMatch(id, opponent) {
+    if (!window.confirm(`¿Eliminar el partido vs ${opponent}? Esta acción no se puede deshacer.`)) return;
+    const { [id]: _removed, ...restMatchesById } = dataRef.current.matchesById;
+    const updatedList = dataRef.current.matchesList.filter((m) => m.id !== id);
+    commit({ ...dataRef.current, matchesList: updatedList, matchesById: restMatchesById });
+    if (match && match.id === id) {
+      setMatch(null);
+      setView("home");
+    }
+  }
+
   function updateMatch(updated, persistNow) {
     setMatch(updated);
     commit(
@@ -1418,6 +1437,7 @@ function App() {
           squadCount={data.squad.length}
           onNewMatch={() => setView("setup")}
           onOpenMatch={openMatch}
+          onDeleteMatch={deleteMatch}
           onGoSquad={() => setView("squad")}
           onGoSeason={() => setView("season")}
           syncStatus={syncStatus}
