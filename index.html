@@ -508,6 +508,8 @@ function SquadManager({ squad, onSave, onBack }) {
           value={number}
           onChange={(e) => setNumber(e.target.value)}
           placeholder="Dorsal"
+          inputMode="numeric"
+          pattern="[0-9]*"
           className="mp-input px-3 py-2 w-20 text-center"
         />
         <input
@@ -622,6 +624,8 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
             type="number"
             value={halfLength}
             onChange={(e) => setHalfLength(e.target.value)}
+            inputMode="numeric"
+            pattern="[0-9]*"
             className="mp-input px-3 py-2 w-full mt-1"
           />
         </div>
