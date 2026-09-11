@@ -91,6 +91,9 @@ const GOALKEEPER_NUMBERS = ["1", "13"];
 const SET_PIECE_GOAL_TYPES = ["gol_corner", "gol_falta", "gol_penalti"];
 const ALL_GOAL_TYPES = ["gol", ...SET_PIECE_GOAL_TYPES];
 
+// Grupos de eventos pensados para jugadores de campo (se ocultan en las estadísticas de los porteros)
+const FIELD_PLAYER_GROUPS = ["ataque", "posesion", "defensa"];
+
 // Eventos que piden un detalle adicional al registrarlos (motivo de tarjeta, zona de falta...)
 const CARD_REASONS = [
   { value: "falta", label: "Falta" },
@@ -1738,6 +1741,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
         .map((p) => {
           const open = openId === p.id;
           const s = computePlayerStats(p.id, events);
+          const isGoalkeeper = GOALKEEPER_NUMBERS.includes(String(p.number));
           return (
             <div key={p.id} className="mp-card overflow-hidden">
               <button
@@ -1750,7 +1754,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
                 </span>
                 <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
               </button>
-              {open && (
+              {open && !isGoalkeeper && (
                 <div className="px-3 pb-3 flex flex-col gap-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Duelos ganados</span>
@@ -1791,7 +1795,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   </div>
                 </div>
               )}
-              {open && GOALKEEPER_NUMBERS.includes(String(p.number)) && (
+              {open && isGoalkeeper && (
                 <div
                   className="px-3 pb-3 pt-2 flex flex-col gap-2"
                   style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}
@@ -1817,7 +1821,9 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   own.forEach((e) => {
                     counts[e.type] = (counts[e.type] || 0) + 1;
                   });
-                  const usedTypes = EVENT_TYPES.filter((ev) => counts[ev.id]);
+                  const usedTypes = EVENT_TYPES.filter(
+                    (ev) => counts[ev.id] && !(isGoalkeeper && FIELD_PLAYER_GROUPS.includes(ev.group))
+                  );
                   if (usedTypes.length === 0) return null;
                   const matchesPlayed = matches
                     ? matches.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length
