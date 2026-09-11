@@ -450,7 +450,7 @@ function SyncSettings({
 /* ---------------------------------------------------------
    Pantalla: Inicio
 --------------------------------------------------------- */
-function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGoSeason, onGoSetPieces, squadCount, syncStatus, onGoSync }) {
+function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGoSeason, onGoSetPieces, onGoCharts, squadCount, syncStatus, onGoSync }) {
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-3 pt-2">
@@ -485,9 +485,16 @@ function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGo
 
       <button
         onClick={onGoSetPieces}
-        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-6"
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-2"
       >
         Balón parado
+      </button>
+
+      <button
+        onClick={onGoCharts}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-6"
+      >
+        Gráficos
       </button>
 
       <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
@@ -2239,18 +2246,14 @@ function SeasonStats({ matches, squad, onBack, onGoCharts }) {
       >
         {showPlayerStats ? "Ocultar estadísticas por jugador" : "Ver estadísticas por jugador"}
       </button>
-      {showPlayerStats && (
-        <React.Fragment>
-          <PlayerStatsAccordion players={squad} events={allSeasonEvents} matches={matches} />
+      {showPlayerStats && <PlayerStatsAccordion players={squad} events={allSeasonEvents} matches={matches} />}
 
-          <button
-            onClick={onGoCharts}
-            className="mp-btn mp-btn-outline w-full py-2.5 text-sm mt-3 mb-2"
-          >
-            Ver gráficos
-          </button>
-        </React.Fragment>
-      )}
+      <button
+        onClick={onGoCharts}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm mt-2"
+      >
+        Ver gráficos
+      </button>
     </div>
   );
 }
@@ -2688,6 +2691,7 @@ function App() {
           onGoSquad={() => setView("squad")}
           onGoSeason={() => setView("season")}
           onGoSetPieces={() => setView("setpieces")}
+          onGoCharts={() => setView("charts")}
           syncStatus={syncStatus}
           onGoSync={() => setView("sync")}
         />
@@ -2728,7 +2732,7 @@ function App() {
           players={data.squad}
           events={Object.values(data.matchesById).flatMap((m) => m.events)}
           teamEvents={Object.values(data.matchesById).flatMap((m) => m.teamEvents || [])}
-          onBack={() => setView("season")}
+          onBack={() => setView("home")}
         />
       )}
       {view === "setpieces" && (
