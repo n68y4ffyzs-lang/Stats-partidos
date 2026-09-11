@@ -91,6 +91,30 @@ const GOALKEEPER_NUMBERS = ["1", "13"];
 const SET_PIECE_GOAL_TYPES = ["gol_corner", "gol_falta", "gol_penalti"];
 const ALL_GOAL_TYPES = ["gol", ...SET_PIECE_GOAL_TYPES];
 
+// Eventos que piden un detalle adicional al registrarlos (motivo de tarjeta, zona de falta...)
+const CARD_REASONS = [
+  { value: "falta", label: "Falta" },
+  { value: "protestar", label: "Protestar" },
+  { value: "ultimo_hombre", label: "Último hombre" },
+];
+const FOUL_ZONES = [
+  { value: "propio", label: "Campo propio" },
+  { value: "rival", label: "Campo rival" },
+];
+const EVENTS_WITH_DETAIL = {
+  amarilla: { field: "motivo", options: CARD_REASONS, prompt: "Motivo de la tarjeta amarilla" },
+  roja: { field: "motivo", options: CARD_REASONS, prompt: "Motivo de la tarjeta roja" },
+  falta_cometida: { field: "zona", options: FOUL_ZONES, prompt: "¿Dónde fue la falta?" },
+};
+const EVENT_DETAIL_OPTIONS = [...CARD_REASONS, ...FOUL_ZONES];
+
+function eventDetailLabel(entry) {
+  const value = entry.motivo || entry.zona;
+  if (!value) return null;
+  const found = EVENT_DETAIL_OPTIONS.find((o) => o.value === value);
+  return found ? found.label : value;
+}
+
 const GROUP_META = {
   ataque: { label: "Ataque", cls: "chip-turf" },
   posesion: { label: "Posesión", cls: "chip-cielo" },
@@ -706,6 +730,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
   const [subOutId, setSubOutId] = useState(null);
   const [tab, setTab] = useState("jugadores");
   const [showPlayerStats, setShowPlayerStats] = useState(false);
+  const [pendingDetail, setPendingDetail] = useState(null);
   const [, forceTick] = useState(0);
 
   const matchRef = useRef(match);
@@ -780,6 +805,10 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
 
   function addEvent(typeId) {
     if (!selectedPlayerId) return;
+    if (EVENTS_WITH_DETAIL[typeId]) {
+      setPendingDetail({ typeId, playerId: selectedPlayerId });
+      return;
+    }
     const p = playerById(selectedPlayerId);
     const half = match.clock.activeHalf;
     const seconds = currentElapsed();
@@ -795,6 +824,33 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
       type: typeId,
     };
     onUpdate({ ...match, events: [...match.events, entry] }, true);
+  }
+
+  function confirmDetail(value) {
+    if (!pendingDetail) return;
+    const { typeId, playerId } = pendingDetail;
+    const meta = EVENTS_WITH_DETAIL[typeId];
+    const p = playerById(playerId);
+    const half = match.clock.activeHalf;
+    const seconds = currentElapsed();
+    const minute = currentMinute();
+    const entry = {
+      id: genId(),
+      half,
+      seconds,
+      minute,
+      playerId: p.id,
+      playerNumber: p.number,
+      playerName: p.name,
+      type: typeId,
+      [meta.field]: value,
+    };
+    onUpdate({ ...match, events: [...match.events, entry] }, true);
+    setPendingDetail(null);
+  }
+
+  function cancelDetail() {
+    setPendingDetail(null);
   }
 
   function removeEvent(id) {
@@ -1031,6 +1087,29 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         </div>
 
         <div>
+          {/* Detalle pendiente: motivo de tarjeta o zona de la falta */}
+          {pendingDetail && (
+            <div className="mp-card p-3 mb-3" style={{ borderColor: "var(--amber)" }}>
+              <div className="text-sm mb-2">
+                {EVENTS_WITH_DETAIL[pendingDetail.typeId].prompt} — {playerById(pendingDetail.playerId).name}
+              </div>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {EVENTS_WITH_DETAIL[pendingDetail.typeId].options.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => confirmDetail(opt.value)}
+                    className="mp-btn px-3 py-2 text-sm"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <button onClick={cancelDetail} className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                Cancelar
+              </button>
+            </div>
+          )}
+
           {/* Eventos */}
           <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
             {selectedPlayerId
@@ -1062,6 +1141,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                   <span className="text-sm">
                     <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
                     #{t.playerNumber} {t.playerName} — {EVENT_LABEL[t.type]}
+                    {eventDetailLabel(t) && ` (${eventDetailLabel(t)})`}
                   </span>
                   <button onClick={() => removeEvent(t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
                     Deshacer
@@ -1443,7 +1523,7 @@ function MatchTotals({ events }) {
     (totals["parada_area_pequena"] || 0);
 
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
       <StatCard label="Faltas totales" value={faltas} />
       <StatCard
         label="Tiros a puerta"
@@ -1483,6 +1563,8 @@ function computePlayerStats(playerId, events) {
   const paradas = count("parada_area") + count("parada_fuera_area") + count("parada_area_pequena");
   const despejes = count("despeje");
   const golesEncajados = count("gol_encajado");
+  const amarillas = count("amarilla");
+  const rojas = count("roja");
   return {
     duelosGanados,
     duelosPerdidos,
@@ -1503,6 +1585,8 @@ function computePlayerStats(playerId, events) {
     paradas,
     despejes,
     golesEncajados,
+    amarillas,
+    rojas,
   };
 }
 
@@ -1657,6 +1741,59 @@ function PlayerBarChart({ title, color, rows }) {
   );
 }
 
+function CardsChart({ withStats }) {
+  const rows = withStats
+    .map(({ p, s }) => ({ label: p.name, amarillas: s.amarillas, rojas: s.rojas }))
+    .filter((r) => r.amarillas > 0 || r.rojas > 0)
+    .sort((a, b) => b.amarillas + b.rojas - (a.amarillas + a.rojas));
+
+  if (rows.length === 0) return null;
+  const max = Math.max(...rows.map((r) => Math.max(r.amarillas, r.rojas)));
+
+  return (
+    <div className="mp-card p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Tarjetas</div>
+        <div className="flex items-center gap-3 text-[11px]" style={{ color: "var(--chalk-dim)" }}>
+          <span className="flex items-center gap-1">
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--amber)", display: "inline-block" }} />
+            Amarillas
+          </span>
+          <span className="flex items-center gap-1">
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--crimson)", display: "inline-block" }} />
+            Rojas
+          </span>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2.5">
+        {rows.map((r) => (
+          <div key={r.label}>
+            <div className="text-xs mb-1 truncate">{r.label}</div>
+            <div className="flex flex-col gap-1">
+              {[
+                { value: r.amarillas, color: "var(--amber)" },
+                { value: r.rojas, color: "var(--crimson)" },
+              ].map((bar, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="flex-1 h-2.5 rounded-full" style={{ background: "rgba(244,241,232,0.08)" }}>
+                    <div
+                      className="h-2.5 rounded-full"
+                      style={{ width: `${max === 0 ? 0 : (bar.value / max) * 100}%`, background: bar.color }}
+                    />
+                  </div>
+                  <div className="text-[11px] w-4 text-right" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {bar.value || ""}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PlayerStatsCharts({ players, events }) {
   const withStats = players.map((p) => ({ p, s: computePlayerStats(p.id, events) }));
 
@@ -1681,7 +1818,9 @@ function PlayerStatsCharts({ players, events }) {
     { title: "Goles encajados (portero)", color: "var(--crimson)", rows: rowsFor((s) => s.golesEncajados) },
   ].filter((c) => c.rows.length > 0);
 
-  if (charts.length === 0) {
+  const hasCards = withStats.some(({ s }) => s.amarillas > 0 || s.rojas > 0);
+
+  if (charts.length === 0 && !hasCards) {
     return (
       <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
         Aún no hay suficientes eventos registrados para mostrar gráficos.
@@ -1690,7 +1829,8 @@ function PlayerStatsCharts({ players, events }) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <CardsChart withStats={withStats} />
       {charts.map((c) => (
         <PlayerBarChart key={c.title} title={c.title} color={c.color} rows={c.rows} />
       ))}
@@ -1698,10 +1838,9 @@ function PlayerStatsCharts({ players, events }) {
   );
 }
 
-function SeasonStats({ matches, squad, onBack }) {
+function SeasonStats({ matches, squad, onBack, onGoCharts }) {
   const [showTeamStats, setShowTeamStats] = useState(false);
   const [showPlayerStats, setShowPlayerStats] = useState(false);
-  const [showCharts, setShowCharts] = useState(false);
   const allSeasonEvents = matches.flatMap((m) => m.events);
 
   const stats = {};
@@ -1729,7 +1868,7 @@ function SeasonStats({ matches, squad, onBack }) {
     .sort((a, b) => b.golesAsistencias - a.golesAsistencias);
 
   return (
-    <div className="max-w-md mx-auto p-4 pb-10">
+    <div className="max-w-4xl mx-auto p-4 pb-10">
       <div className="flex items-center gap-3 mb-4 pt-2">
         <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
           Volver
@@ -1801,14 +1940,30 @@ function SeasonStats({ matches, squad, onBack }) {
           <PlayerStatsAccordion players={squad} events={allSeasonEvents} />
 
           <button
-            onClick={() => setShowCharts((v) => !v)}
+            onClick={onGoCharts}
             className="mp-btn mp-btn-outline w-full py-2.5 text-sm mt-3 mb-2"
           >
-            {showCharts ? "Ocultar gráficos" : "Ver gráficos"}
+            Ver gráficos
           </button>
-          {showCharts && <PlayerStatsCharts players={squad} events={allSeasonEvents} />}
         </React.Fragment>
       )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Gráficos de jugadores
+--------------------------------------------------------- */
+function PlayerChartsScreen({ players, events, onBack }) {
+  return (
+    <div className="max-w-4xl mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-4 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <h1 className="display text-2xl font-semibold">Gráficos de jugadores</h1>
+      </div>
+      <PlayerStatsCharts players={players} events={events} />
     </div>
   );
 }
@@ -2232,7 +2387,19 @@ function App() {
         <MatchSummary match={match} onBack={goHome} onExport={exportCSV} />
       )}
       {view === "season" && (
-        <SeasonStats matches={Object.values(data.matchesById)} squad={data.squad} onBack={goHome} />
+        <SeasonStats
+          matches={Object.values(data.matchesById)}
+          squad={data.squad}
+          onBack={goHome}
+          onGoCharts={() => setView("charts")}
+        />
+      )}
+      {view === "charts" && (
+        <PlayerChartsScreen
+          players={data.squad}
+          events={Object.values(data.matchesById).flatMap((m) => m.events)}
+          onBack={() => setView("season")}
+        />
       )}
       {view === "setpieces" && (
         <SetPieceStats matches={Object.values(data.matchesById)} onBack={goHome} />
