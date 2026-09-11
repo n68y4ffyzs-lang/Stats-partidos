@@ -176,6 +176,21 @@ function formatClock(totalSeconds) {
   return `${m}:${s}`;
 }
 
+// Cálculo puro del tiempo transcurrido y el minuto a partir del propio match,
+// sin depender de referencias locales que puedan quedarse desactualizadas entre componentes.
+function computeElapsed(match) {
+  const key = match.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
+  if (!match.clock.running) return match.clock[key];
+  const startedAt = match.clock.runStartedAt || Date.now();
+  return match.clock[key] + Math.floor((Date.now() - startedAt) / 1000);
+}
+
+function computeMinute(match) {
+  const secs = computeElapsed(match);
+  if (match.clock.activeHalf === 1) return Math.floor(secs / 60) + 1;
+  return match.halfLength + Math.floor(secs / 60) + 1;
+}
+
 function halfLabel(match) {
   if (match.half === "descanso") return "Descanso";
   if (match.half === "finalizado") return "Finalizado";
@@ -775,7 +790,6 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
   const [, forceTick] = useState(0);
 
   const matchRef = useRef(match);
-  const anchorRef = useRef(null); // { atMs, base } — referencia para calcular el tiempo en directo sin tocar el estado global cada segundo
   useEffect(() => { matchRef.current = match; }, [match]);
 
   const playerById = useCallback(
@@ -790,21 +804,12 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
   const clockKey = match.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
 
   function currentElapsed() {
-    if (!match.clock.running || !anchorRef.current) return match.clock[clockKey];
-    return anchorRef.current.base + Math.floor((Date.now() - anchorRef.current.atMs) / 1000);
+    return computeElapsed(match);
   }
 
   function currentMinute() {
-    const secs = currentElapsed();
-    if (match.clock.activeHalf === 1) return Math.floor(secs / 60) + 1;
-    return match.halfLength + Math.floor(secs / 60) + 1;
+    return computeMinute(match);
   }
-
-  // Ancla el cronómetro en directo al reanudar (o al cambiar de parte)
-  useEffect(() => {
-    anchorRef.current = match.clock.running ? { atMs: Date.now(), base: match.clock[clockKey] } : null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [match.clock.running, match.clock.activeHalf]);
 
   // Refresca la pantalla cada segundo sin escribir en almacenamiento ni red
   useEffect(() => {
@@ -813,13 +818,17 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
     return () => clearInterval(interval);
   }, [match.clock.running]);
 
-  // Persiste el cronómetro cada pocos segundos, sin bloquear el tap del usuario
+  // Persiste el cronómetro cada pocos segundos, sin bloquear el tap del usuario.
+  // Al persistir, reinicia runStartedAt para que el siguiente cálculo no cuente el tiempo dos veces.
   useEffect(() => {
     if (!match.clock.running) return;
     const interval = setInterval(() => {
       const m = matchRef.current;
       const key = m.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
-      onUpdate({ ...m, clock: { ...m.clock, [key]: currentElapsed() } }, false);
+      onUpdate(
+        { ...m, clock: { ...m.clock, [key]: computeElapsed(m), runStartedAt: Date.now() } },
+        false
+      );
     }, 5000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -828,26 +837,46 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
   function toggleRunning() {
     const willRun = !match.clock.running;
     onUpdate(
-      { ...match, clock: { ...match.clock, [clockKey]: currentElapsed(), running: willRun } },
+      {
+        ...match,
+        clock: {
+          ...match.clock,
+          [clockKey]: computeElapsed(match),
+          running: willRun,
+          runStartedAt: willRun ? Date.now() : match.clock.runStartedAt,
+        },
+      },
       true
     );
   }
 
   function resetClock() {
     if (!window.confirm("¿Reiniciar el cronómetro de esta parte a 00:00?")) return;
-    anchorRef.current = match.clock.running ? { atMs: Date.now(), base: 0 } : null;
-    onUpdate({ ...match, clock: { ...match.clock, [clockKey]: 0 } }, true);
+    onUpdate(
+      {
+        ...match,
+        clock: {
+          ...match.clock,
+          [clockKey]: 0,
+          runStartedAt: match.clock.running ? Date.now() : match.clock.runStartedAt,
+        },
+      },
+      true
+    );
   }
 
   function endHalf1() {
     onUpdate(
-      { ...match, half: "descanso", clock: { ...match.clock, half1Elapsed: currentElapsed(), running: false } },
+      { ...match, half: "descanso", clock: { ...match.clock, half1Elapsed: computeElapsed(match), running: false } },
       true
     );
   }
 
   function startHalf2() {
-    onUpdate({ ...match, half: 2, clock: { ...match.clock, running: true, activeHalf: 2 } }, true);
+    onUpdate(
+      { ...match, half: 2, clock: { ...match.clock, running: true, activeHalf: 2, runStartedAt: Date.now() } },
+      true
+    );
   }
 
   function addEvent(typeId) {
@@ -1020,7 +1049,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         </div>
       </div>
 
-      <OpponentChanceMarker match={match} onUpdate={onUpdate} currentMinute={currentMinute} />
+      <OpponentChanceMarker match={match} onUpdate={onUpdate} />
 
       {/* Pestañas: jugadores/eventos en directo, o el resumen de cómo va el partido */}
       <div className="flex gap-2 mb-3">
@@ -1055,11 +1084,11 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
       </div>
 
       {tab === "campo" && (
-        <FieldFormation match={match} squad={squad} playerById={playerById} onUpdate={onUpdate} currentMinute={currentMinute} />
+        <FieldFormation match={match} squad={squad} playerById={playerById} onUpdate={onUpdate} />
       )}
 
       {tab === "equipo" && (
-        <TeamEventsPanel match={match} onUpdate={onUpdate} currentMinute={currentMinute} />
+        <TeamEventsPanel match={match} onUpdate={onUpdate} />
       )}
 
       {tab === "estadisticas" && (
@@ -1242,7 +1271,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
 /* ---------------------------------------------------------
    Campo: colocar a cada jugador en su posición
 --------------------------------------------------------- */
-function FieldFormation({ match, squad, playerById, onUpdate, currentMinute }) {
+function FieldFormation({ match, squad, playerById, onUpdate }) {
   const [selectedId, setSelectedId] = useState(null);
   const pitchRef = useRef(null);
   const positions = match.positions || {};
@@ -1268,7 +1297,7 @@ function FieldFormation({ match, squad, playerById, onUpdate, currentMinute }) {
     const outP = playerById(outId);
     const inP = playerById(inId);
     const half = match.clock.activeHalf;
-    const minute = currentMinute();
+    const minute = computeMinute(match);
     const newOnPitch = match.onPitch.map((id) => (id === outId ? inId : id));
     const newBench = match.bench.map((id) => (id === inId ? outId : id));
     const subEntry = {
@@ -1498,11 +1527,11 @@ function TeamEventCounter({ label, value, onAdd, onUndo }) {
   );
 }
 
-function OpponentChanceMarker({ match, onUpdate, currentMinute }) {
+function OpponentChanceMarker({ match, onUpdate }) {
   const opponentChances = match.opponentChances || [];
 
   function addOpponentChance() {
-    const entry = { id: genId(), half: match.clock.activeHalf, minute: currentMinute() };
+    const entry = { id: genId(), half: match.clock.activeHalf, minute: computeMinute(match) };
     onUpdate({ ...match, opponentChances: [...opponentChances, entry] }, true);
   }
   function removeOpponentChance(id) {
@@ -1536,14 +1565,14 @@ function OpponentChanceMarker({ match, onUpdate, currentMinute }) {
   );
 }
 
-function TeamEventsPanel({ match, onUpdate, currentMinute }) {
+function TeamEventsPanel({ match, onUpdate }) {
   const teamEvents = match.teamEvents || [];
 
   function countOf(typeId) {
     return teamEvents.filter((e) => e.type === typeId).length;
   }
   function addTeamEvent(typeId) {
-    const entry = { id: genId(), type: typeId, half: match.clock.activeHalf, minute: currentMinute() };
+    const entry = { id: genId(), type: typeId, half: match.clock.activeHalf, minute: computeMinute(match) };
     onUpdate({ ...match, teamEvents: [...teamEvents, entry] }, true);
   }
   function undoLastTeamEvent(typeId) {
@@ -2664,7 +2693,7 @@ function App() {
       halfLength,
       half: 1,
       finished: false,
-      clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1 },
+      clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
       onPitch: titulares,
       bench,
       events: [],
