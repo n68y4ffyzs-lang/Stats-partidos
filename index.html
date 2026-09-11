@@ -115,6 +115,21 @@ function eventDetailLabel(entry) {
   return found ? found.label : value;
 }
 
+// Eventos de equipo: no se asignan a un jugador concreto (córners, ataques por banda...)
+const TEAM_EVENT_TYPES = [
+  { id: "corner_favor", label: "Córner a favor", section: "corners", short: "A favor" },
+  { id: "corner_contra", label: "Córner en contra", section: "corners", short: "En contra" },
+  { id: "ataque_favor_derecha", label: "Ataque a favor — banda derecha", section: "ataques_favor", short: "Banda derecha" },
+  { id: "ataque_favor_izquierda", label: "Ataque a favor — banda izquierda", section: "ataques_favor", short: "Banda izquierda" },
+  { id: "ataque_contra_derecha", label: "Ataque en contra — banda derecha", section: "ataques_contra", short: "Banda derecha" },
+  { id: "ataque_contra_izquierda", label: "Ataque en contra — banda izquierda", section: "ataques_contra", short: "Banda izquierda" },
+];
+const TEAM_EVENT_SECTIONS = [
+  { id: "corners", label: "Córners" },
+  { id: "ataques_favor", label: "Ataques a favor por banda" },
+  { id: "ataques_contra", label: "Ataques en contra por banda" },
+];
+
 const GROUP_META = {
   ataque: { label: "Ataque", cls: "chip-turf" },
   posesion: { label: "Posesión", cls: "chip-cielo" },
@@ -984,10 +999,21 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         >
           Campo
         </button>
+        <button
+          onClick={() => setTab("equipo")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "equipo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Eventos de equipo
+        </button>
       </div>
 
       {tab === "campo" && (
         <FieldFormation match={match} squad={squad} playerById={playerById} onUpdate={onUpdate} currentMinute={currentMinute} />
+      )}
+
+      {tab === "equipo" && (
+        <TeamEventsPanel match={match} onUpdate={onUpdate} currentMinute={currentMinute} />
       )}
 
       {tab === "estadisticas" && (
@@ -1405,6 +1431,67 @@ function FieldFormation({ match, squad, playerById, onUpdate, currentMinute }) {
 }
 
 /* ---------------------------------------------------------
+   Eventos de equipo: no se asignan a un jugador (córners, ataques por banda...)
+--------------------------------------------------------- */
+function TeamEventCounter({ label, value, onAdd, onUndo }) {
+  return (
+    <div className="mp-card p-3">
+      <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>{label}</div>
+      <div className="display text-3xl font-semibold leading-none mb-2">{value}</div>
+      <div className="flex gap-2">
+        <button onClick={onAdd} className="mp-btn mp-btn-primary px-3 py-1.5 text-xs flex-1">
+          +1
+        </button>
+        {value > 0 && (
+          <button onClick={onUndo} className="mp-btn mp-btn-outline px-3 py-1.5 text-xs" style={{ color: "var(--crimson)" }}>
+            Deshacer
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TeamEventsPanel({ match, onUpdate, currentMinute }) {
+  const teamEvents = match.teamEvents || [];
+
+  function countOf(typeId) {
+    return teamEvents.filter((e) => e.type === typeId).length;
+  }
+  function addTeamEvent(typeId) {
+    const entry = { id: genId(), type: typeId, half: match.clock.activeHalf, minute: currentMinute() };
+    onUpdate({ ...match, teamEvents: [...teamEvents, entry] }, true);
+  }
+  function undoLastTeamEvent(typeId) {
+    const idxFromEnd = [...teamEvents].reverse().findIndex((e) => e.type === typeId);
+    if (idxFromEnd === -1) return;
+    const idx = teamEvents.length - 1 - idxFromEnd;
+    onUpdate({ ...match, teamEvents: [...teamEvents.slice(0, idx), ...teamEvents.slice(idx + 1)] }, true);
+  }
+
+  return (
+    <div className="mb-4">
+      {TEAM_EVENT_SECTIONS.map((section) => (
+        <div key={section.id} className="mb-4">
+          <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>{section.label}</div>
+          <div className="grid grid-cols-2 gap-2">
+            {TEAM_EVENT_TYPES.filter((t) => t.section === section.id).map((t) => (
+              <TeamEventCounter
+                key={t.id}
+                label={t.short}
+                value={countOf(t.id)}
+                onAdd={() => addTeamEvent(t.id)}
+                onUndo={() => undoLastTeamEvent(t.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    Pantalla: Resumen
 --------------------------------------------------------- */
 function MatchSummary({ match, onBack, onExport }) {
@@ -1541,6 +1628,48 @@ function MatchTotals({ events }) {
   );
 }
 
+/* ---------------------------------------------------------
+   Estadísticas del equipo de toda la temporada, en medias por partido
+--------------------------------------------------------- */
+function SeasonTeamStats({ matches }) {
+  const n = matches.length;
+  if (n === 0) return null;
+
+  const allEvents = matches.flatMap((m) => m.events);
+  const count = (type) => allEvents.filter((e) => e.type === type).length;
+  const teamEventCount = (type) =>
+    matches.reduce((sum, m) => sum + (m.teamEvents || []).filter((e) => e.type === type).length, 0);
+
+  const faltas = count("falta_cometida");
+  const amarillas = count("amarilla");
+  const rojas = count("roja");
+  const tirosPuerta = count("remate_puerta");
+  const tirosFuera = count("remate_fuera");
+  const corners = teamEventCount("corner_favor");
+  const robos = count("recuperacion");
+  const golesFavor = allEvents.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
+  const golesContra = matches.reduce(
+    (sum, m) => sum + (m.concededSetPieces || []).length + m.events.filter((e) => e.type === "gol_encajado").length,
+    0
+  );
+
+  const avg = (total) => Math.round((total / n) * 10) / 10;
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+      <StatCard label="Faltas por partido" value={avg(faltas)} />
+      <StatCard label="Amarillas por partido" value={avg(amarillas)} />
+      <StatCard label="Rojas por partido" value={avg(rojas)} />
+      <StatCard label="Tiros a puerta/partido" value={avg(tirosPuerta)} />
+      <StatCard label="Tiros fuera/partido" value={avg(tirosFuera)} />
+      <StatCard label="Córners por partido" value={avg(corners)} />
+      <StatCard label="Robos por partido" value={avg(robos)} />
+      <StatCard label="Goles a favor/partido" value={avg(golesFavor)} />
+      <StatCard label="Goles encajados/partido" value={avg(golesContra)} />
+    </div>
+  );
+}
+
 function computePlayerStats(playerId, events) {
   const own = events.filter((e) => e.playerId === playerId);
   const count = (type) => own.filter((e) => e.type === type).length;
@@ -1590,7 +1719,7 @@ function computePlayerStats(playerId, events) {
   };
 }
 
-function PlayerStatsAccordion({ players, events }) {
+function PlayerStatsAccordion({ players, events, matches }) {
   const [openId, setOpenId] = useState(null);
 
   if (players.length === 0) {
@@ -1690,6 +1819,9 @@ function PlayerStatsAccordion({ players, events }) {
                   });
                   const usedTypes = EVENT_TYPES.filter((ev) => counts[ev.id]);
                   if (usedTypes.length === 0) return null;
+                  const matchesPlayed = matches
+                    ? matches.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length
+                    : 0;
                   return (
                     <div className="px-3 pb-3 pt-2" style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}>
                       <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>Todos los eventos</div>
@@ -1697,7 +1829,14 @@ function PlayerStatsAccordion({ players, events }) {
                         {usedTypes.map((ev) => (
                           <div key={ev.id} className="flex items-center justify-between text-sm">
                             <span style={{ color: "var(--chalk-dim)" }}>{ev.label}</span>
-                            <span className="font-semibold">{counts[ev.id]}</span>
+                            <span className="font-semibold">
+                              {counts[ev.id]}
+                              {matches && matchesPlayed > 0 && (
+                                <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                                  ({(counts[ev.id] / matchesPlayed).toFixed(1)}/partido)
+                                </span>
+                              )}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -2034,13 +2173,13 @@ function SeasonStats({ matches, squad, onBack, onGoCharts }) {
         {showTeamStats ? "Ocultar estadísticas del equipo" : "Ver estadísticas del equipo"}
       </button>
       {showTeamStats && (
-        allSeasonEvents.length === 0 ? (
+        matches.length === 0 ? (
           <div className="mp-card p-4 text-sm mb-2" style={{ color: "var(--chalk-dim)" }}>
-            Aún no hay eventos registrados en ningún partido.
+            Aún no hay partidos registrados.
           </div>
         ) : (
           <div className="mb-2">
-            <MatchTotals events={allSeasonEvents} />
+            <SeasonTeamStats matches={matches} />
           </div>
         )
       )}
@@ -2053,7 +2192,7 @@ function SeasonStats({ matches, squad, onBack, onGoCharts }) {
       </button>
       {showPlayerStats && (
         <React.Fragment>
-          <PlayerStatsAccordion players={squad} events={allSeasonEvents} />
+          <PlayerStatsAccordion players={squad} events={allSeasonEvents} matches={matches} />
 
           <button
             onClick={onGoCharts}
@@ -2403,6 +2542,7 @@ function App() {
       events: [],
       subs: [],
       concededSetPieces: [],
+      teamEvents: [],
       positions: {},
     };
     const updatedList = [
