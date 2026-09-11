@@ -1026,7 +1026,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
               Aún no hay eventos registrados en este partido.
             </div>
           ) : (
-            <MatchTotals events={match.events} />
+            <MatchTotals events={match.events} teamEvents={match.teamEvents || []} />
           )}
 
           <button
@@ -1591,13 +1591,19 @@ function StatCard({ label, value, sub }) {
   );
 }
 
-function MatchTotals({ events }) {
+function MatchTotals({ events, teamEvents = [] }) {
   const totals = {};
   events.forEach((e) => {
     totals[e.type] = (totals[e.type] || 0) + 1;
   });
+  const teamCount = (type) => teamEvents.filter((e) => e.type === type).length;
 
-  const faltas = totals["falta_cometida"] || 0;
+  const faltasEnContra = totals["falta_cometida"] || 0;
+  const faltasAFavor = totals["falta_recibida"] || 0;
+  const amarillas = totals["amarilla"] || 0;
+  const rojas = totals["roja"] || 0;
+  const cornersFavor = teamCount("corner_favor");
+  const cornersContra = teamCount("corner_contra");
   const tirosPuerta = totals["remate_puerta"] || 0;
   const tirosFuera = totals["remate_fuera"] || 0;
   const tirosTotales = tirosPuerta + tirosFuera;
@@ -1614,7 +1620,12 @@ function MatchTotals({ events }) {
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-      <StatCard label="Faltas totales" value={faltas} />
+      <StatCard label="Faltas a favor" value={faltasAFavor} />
+      <StatCard label="Faltas en contra" value={faltasEnContra} />
+      <StatCard label="Tarjetas amarillas" value={amarillas} />
+      <StatCard label="Tarjetas rojas" value={rojas} />
+      <StatCard label="Córners a favor" value={cornersFavor} />
+      <StatCard label="Córners en contra" value={cornersContra} />
       <StatCard
         label="Tiros a puerta"
         value={tirosPuertaPct === null ? "–" : `${tirosPuertaPct}%`}
