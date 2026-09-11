@@ -1742,6 +1742,11 @@ function PlayerStatsAccordion({ players, events, matches }) {
           const open = openId === p.id;
           const s = computePlayerStats(p.id, events);
           const isGoalkeeper = GOALKEEPER_NUMBERS.includes(String(p.number));
+          const matchesPlayed = matches
+            ? matches.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length
+            : 0;
+          const perMatch = (total) =>
+            matches && matchesPlayed > 0 ? ` (${(total / matchesPlayed).toFixed(1)}/partido)` : "";
           return (
             <div key={p.id} className="mp-card overflow-hidden">
               <button
@@ -1802,15 +1807,30 @@ function PlayerStatsAccordion({ players, events, matches }) {
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Paradas</span>
-                    <span className="text-sm font-semibold">{s.paradas}</span>
+                    <span className="text-sm font-semibold">
+                      {s.paradas}
+                      <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                        {perMatch(s.paradas)}
+                      </span>
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Despejes</span>
-                    <span className="text-sm font-semibold">{s.despejes}</span>
+                    <span className="text-sm font-semibold">
+                      {s.despejes}
+                      <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                        {perMatch(s.despejes)}
+                      </span>
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Goles encajados</span>
-                    <span className="text-sm font-semibold">{s.golesEncajados}</span>
+                    <span className="text-sm font-semibold">
+                      {s.golesEncajados}
+                      <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                        {perMatch(s.golesEncajados)}
+                      </span>
+                    </span>
                   </div>
                 </div>
               )}
@@ -1825,9 +1845,6 @@ function PlayerStatsAccordion({ players, events, matches }) {
                     (ev) => counts[ev.id] && !(isGoalkeeper && FIELD_PLAYER_GROUPS.includes(ev.group))
                   );
                   if (usedTypes.length === 0) return null;
-                  const matchesPlayed = matches
-                    ? matches.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length
-                    : 0;
                   return (
                     <div className="px-3 pb-3 pt-2" style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}>
                       <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>Todos los eventos</div>
