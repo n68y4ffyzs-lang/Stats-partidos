@@ -669,7 +669,7 @@ function SquadManager({ squad, onSave, onBack }) {
 function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
   const [opponent, setOpponent] = useState("");
   const [date, setDate] = useState(todayISO());
-  const [halfLength, setHalfLength] = useState(25);
+  const [halfLength, setHalfLength] = useState(45);
   const [titulares, setTitulares] = useState([]);
 
   function toggle(id) {
@@ -680,7 +680,7 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
 
   function submit() {
     if (!opponent.trim() || titulares.length === 0) return;
-    onCreate({ opponent: opponent.trim(), date, halfLength: Number(halfLength) || 25, titulares });
+    onCreate({ opponent: opponent.trim(), date, halfLength: Number(halfLength) || 45, titulares });
   }
 
   if (squad.length === 0) {
@@ -865,6 +865,18 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
     );
   }
 
+  function restartMatchClock() {
+    if (!window.confirm("¿Empezar el partido de nuevo desde el minuto 0 (1ª parte)?")) return;
+    onUpdate(
+      {
+        ...match,
+        half: 1,
+        clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
+      },
+      true
+    );
+  }
+
   function endHalf1() {
     onUpdate(
       { ...match, half: "descanso", clock: { ...match.clock, half1Elapsed: computeElapsed(match), running: false } },
@@ -1030,6 +1042,13 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                 Reiniciar
               </button>
             )}
+            <button
+              onClick={restartMatchClock}
+              className="mp-btn mp-btn-outline px-3 py-2 text-xs"
+              style={{ color: "var(--crimson)" }}
+            >
+              Empezar desde 0
+            </button>
             {match.half === 1 && (
               <button onClick={endHalf1} className="mp-btn mp-btn-outline px-3 py-2 text-xs">
                 Fin 1ª parte
