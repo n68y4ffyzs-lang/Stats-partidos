@@ -1714,7 +1714,7 @@ function PlayerStatsAccordion({ players, events }) {
 /* ---------------------------------------------------------
    Gráfico de barras horizontal, una métrica por jugador
 --------------------------------------------------------- */
-function PlayerBarChart({ title, color, rows }) {
+function PlayerBarChart({ title, color, rows, labelWidth = "w-20" }) {
   if (rows.length === 0) return null;
   const max = Math.max(...rows.map((r) => r.raw));
 
@@ -1724,7 +1724,7 @@ function PlayerBarChart({ title, color, rows }) {
       <div className="flex flex-col gap-1.5">
         {rows.map((r) => (
           <div key={r.label} className="flex items-center gap-2">
-            <div className="text-xs w-20 shrink-0 truncate">{r.label}</div>
+            <div className={`text-xs ${labelWidth} shrink-0 truncate`}>{r.label}</div>
             <div className="flex-1 h-3 rounded-full" style={{ background: "rgba(244,241,232,0.08)" }}>
               <div
                 className="h-3 rounded-full"
@@ -1790,6 +1790,122 @@ function CardsChart({ withStats }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Gráfico de composición: reparto en % entre 2-3 resultados posibles
+--------------------------------------------------------- */
+function PercentBreakdownChart({ title, segments }) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  if (total === 0) return null;
+  const visible = segments.filter((s) => s.value > 0);
+
+  return (
+    <div className="mp-card p-3">
+      <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>{title}</div>
+      <div className="flex w-full h-4 rounded-full overflow-hidden">
+        {visible.map((s, i) => (
+          <div
+            key={s.label}
+            style={{
+              width: `${(s.value / total) * 100}%`,
+              background: s.color,
+              borderRight: i < visible.length - 1 ? "2px solid var(--pitch)" : "none",
+            }}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+        {segments.map((s) => (
+          <div key={s.label} className="flex items-center gap-1 text-[11px]" style={{ color: "var(--chalk-dim)" }}>
+            <span
+              style={{ width: 8, height: 8, borderRadius: 2, background: s.color, display: "inline-block" }}
+            />
+            {s.label}:{" "}
+            <span className="font-semibold" style={{ color: "var(--chalk)" }}>
+              {Math.round((s.value / total) * 100)}% ({s.value})
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TeamStatsCharts({ events }) {
+  const totals = {};
+  events.forEach((e) => {
+    totals[e.type] = (totals[e.type] || 0) + 1;
+  });
+  const count = (t) => totals[t] || 0;
+
+  const eventRows = EVENT_TYPES.map((ev) => ({ label: ev.label, raw: count(ev.id), display: String(count(ev.id)) }))
+    .filter((r) => r.raw > 0)
+    .sort((a, b) => b.raw - a.raw);
+
+  const breakdowns = [
+    {
+      title: "Duelos",
+      segments: [
+        { label: "Ganados", value: count("duelo_ganado") + count("duelo_general_ganado"), color: "var(--turf)" },
+        { label: "Perdidos", value: count("duelo_perdido") + count("duelo_general_perdido"), color: "var(--crimson)" },
+      ],
+    },
+    {
+      title: "Regates",
+      segments: [
+        { label: "Acertados", value: count("regate"), color: "var(--turf)" },
+        { label: "Fallados", value: count("regate_fallado"), color: "var(--crimson)" },
+      ],
+    },
+    {
+      title: "Tiros",
+      segments: [
+        { label: "A puerta", value: count("remate_puerta"), color: "var(--turf)" },
+        { label: "Fuera", value: count("remate_fuera"), color: "var(--amber)" },
+      ],
+    },
+    {
+      title: "Zona de las faltas cometidas",
+      segments: [
+        {
+          label: "Campo propio",
+          value: events.filter((e) => e.type === "falta_cometida" && e.zona === "propio").length,
+          color: "var(--cielo)",
+        },
+        {
+          label: "Campo rival",
+          value: events.filter((e) => e.type === "falta_cometida" && e.zona === "rival").length,
+          color: "var(--amber)",
+        },
+      ],
+    },
+    {
+      title: "Motivo de las tarjetas",
+      segments: CARD_REASONS.map((r, i) => ({
+        label: r.label,
+        value: events.filter((e) => (e.type === "amarilla" || e.type === "roja") && e.motivo === r.value).length,
+        color: ["var(--amber)", "var(--crimson)", "var(--violet)"][i],
+      })),
+    },
+  ].filter((b) => b.segments.some((s) => s.value > 0));
+
+  if (eventRows.length === 0 && breakdowns.length === 0) {
+    return (
+      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+        Aún no hay eventos registrados para mostrar gráficos del equipo.
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <PlayerBarChart title="Eventos totales del equipo" color="var(--turf)" rows={eventRows} labelWidth="w-32" />
+      {breakdowns.map((b) => (
+        <PercentBreakdownChart key={b.title} title={b.title} segments={b.segments} />
+      ))}
     </div>
   );
 }
@@ -1955,15 +2071,39 @@ function SeasonStats({ matches, squad, onBack, onGoCharts }) {
    Pantalla: Gráficos de jugadores
 --------------------------------------------------------- */
 function PlayerChartsScreen({ players, events, onBack }) {
+  const [tab, setTab] = useState("jugadores");
+
   return (
     <div className="max-w-4xl mx-auto p-4 pb-10">
       <div className="flex items-center gap-3 mb-4 pt-2">
         <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
           Volver
         </button>
-        <h1 className="display text-2xl font-semibold">Gráficos de jugadores</h1>
+        <h1 className="display text-2xl font-semibold">Gráficos</h1>
       </div>
-      <PlayerStatsCharts players={players} events={events} />
+
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setTab("jugadores")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "jugadores" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Jugadores
+        </button>
+        <button
+          onClick={() => setTab("equipo")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "equipo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Equipo
+        </button>
+      </div>
+
+      {tab === "jugadores" ? (
+        <PlayerStatsCharts players={players} events={events} />
+      ) : (
+        <TeamStatsCharts events={events} />
+      )}
     </div>
   );
 }
