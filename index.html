@@ -1498,6 +1498,7 @@ function TeamEventCounter({ label, value, onAdd, onUndo }) {
 
 function TeamEventsPanel({ match, onUpdate, currentMinute }) {
   const teamEvents = match.teamEvents || [];
+  const opponentChances = match.opponentChances || [];
 
   function countOf(typeId) {
     return teamEvents.filter((e) => e.type === typeId).length;
@@ -1511,6 +1512,14 @@ function TeamEventsPanel({ match, onUpdate, currentMinute }) {
     if (idxFromEnd === -1) return;
     const idx = teamEvents.length - 1 - idxFromEnd;
     onUpdate({ ...match, teamEvents: [...teamEvents.slice(0, idx), ...teamEvents.slice(idx + 1)] }, true);
+  }
+
+  function addOpponentChance() {
+    const entry = { id: genId(), half: match.clock.activeHalf, minute: currentMinute() };
+    onUpdate({ ...match, opponentChances: [...opponentChances, entry] }, true);
+  }
+  function removeOpponentChance(id) {
+    onUpdate({ ...match, opponentChances: opponentChances.filter((e) => e.id !== id) }, true);
   }
 
   return (
@@ -1531,6 +1540,28 @@ function TeamEventsPanel({ match, onUpdate, currentMinute }) {
           </div>
         </div>
       ))}
+
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        Ocasiones del rival — solo para localizarlas luego en el vídeo, no cuenta en las estadísticas
+      </div>
+      <button onClick={addOpponentChance} className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-2">
+        + Marcar ocasión del rival
+      </button>
+      {opponentChances.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {opponentChances
+            .slice()
+            .sort((a, b) => b.half - a.half || b.minute - a.minute)
+            .map((c) => (
+              <span key={c.id} className="mp-card px-2 py-1 text-xs flex items-center gap-2">
+                {c.minute}'
+                <button onClick={() => removeOpponentChance(c.id)} style={{ color: "var(--crimson)" }}>
+                  ×
+                </button>
+              </span>
+            ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2631,6 +2662,7 @@ function App() {
       subs: [],
       concededSetPieces: [],
       teamEvents: [],
+      opponentChances: [],
       positions: {},
     };
     const updatedList = [
