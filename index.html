@@ -58,9 +58,9 @@ function setStoredSupabaseConfig(url, key) {
 --------------------------------------------------------- */
 const EVENT_TYPES = [
   { id: "gol", label: "Gol", group: "ataque" },
-  { id: "gol_corner", label: "Gol de córner", group: "ataque" },
-  { id: "gol_falta", label: "Gol de falta", group: "ataque" },
-  { id: "gol_penalti", label: "Gol de penalti", group: "ataque" },
+  { id: "gol_corner", label: "Gol de córner", group: "ataque", hidden: true },
+  { id: "gol_falta", label: "Gol de falta", group: "ataque", hidden: true },
+  { id: "gol_penalti", label: "Gol de penalti", group: "ataque", hidden: true },
   { id: "asistencia", label: "Asistencia", group: "ataque" },
   { id: "remate_puerta", label: "Remate a puerta", group: "ataque" },
   { id: "remate_fuera", label: "Remate fuera", group: "ataque" },
@@ -104,15 +104,31 @@ const FOUL_ZONES = [
   { value: "propio", label: "Campo propio" },
   { value: "rival", label: "Campo rival" },
 ];
+// Origen del gol a favor: cada opción remite a su propio tipo de evento (ya existente)
+const GOAL_ORIGIN_OPTIONS = [
+  { value: "gol", label: "De jugada" },
+  { value: "gol_corner", label: "De córner" },
+  { value: "gol_falta", label: "De falta" },
+  { value: "gol_penalti", label: "De penalti" },
+];
+// Origen del gol encajado: se guarda como campo extra sobre el evento "gol_encajado"
+const GOAL_CONCEDED_ORIGIN = [
+  { value: "jugada", label: "De jugada" },
+  { value: "corner", label: "De córner" },
+  { value: "falta", label: "De falta" },
+  { value: "penalti", label: "De penalti" },
+];
 const EVENTS_WITH_DETAIL = {
   amarilla: { field: "motivo", options: CARD_REASONS, prompt: "Motivo de la tarjeta amarilla" },
   roja: { field: "motivo", options: CARD_REASONS, prompt: "Motivo de la tarjeta roja" },
   falta_cometida: { field: "zona", options: FOUL_ZONES, prompt: "¿Dónde fue la falta?" },
+  gol: { field: "__type__", options: GOAL_ORIGIN_OPTIONS, prompt: "¿Cómo fue el gol?" },
+  gol_encajado: { field: "origen", options: GOAL_CONCEDED_ORIGIN, prompt: "¿Cómo fue el gol encajado?" },
 };
-const EVENT_DETAIL_OPTIONS = [...CARD_REASONS, ...FOUL_ZONES];
+const EVENT_DETAIL_OPTIONS = [...CARD_REASONS, ...FOUL_ZONES, ...GOAL_CONCEDED_ORIGIN];
 
 function eventDetailLabel(entry) {
-  const value = entry.motivo || entry.zona;
+  const value = entry.motivo || entry.zona || entry.origen;
   if (!value) return null;
   const found = EVENT_DETAIL_OPTIONS.find((o) => o.value === value);
   return found ? found.label : value;
@@ -817,6 +833,12 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
     );
   }
 
+  function resetClock() {
+    if (!window.confirm("¿Reiniciar el cronómetro de esta parte a 00:00?")) return;
+    anchorRef.current = match.clock.running ? { atMs: Date.now(), base: 0 } : null;
+    onUpdate({ ...match, clock: { ...match.clock, [clockKey]: 0 } }, true);
+  }
+
   function endHalf1() {
     onUpdate(
       { ...match, half: "descanso", clock: { ...match.clock, half1Elapsed: currentElapsed(), running: false } },
@@ -855,6 +877,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
     if (!pendingDetail) return;
     const { typeId, playerId } = pendingDetail;
     const meta = EVENTS_WITH_DETAIL[typeId];
+    const isTypeOverride = meta.field === "__type__";
     const p = playerById(playerId);
     const half = match.clock.activeHalf;
     const seconds = currentElapsed();
@@ -867,9 +890,9 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
       playerId: p.id,
       playerNumber: p.number,
       playerName: p.name,
-      type: typeId,
-      [meta.field]: value,
+      type: isTypeOverride ? value : typeId,
     };
+    if (!isTypeOverride) entry[meta.field] = value;
     onUpdate({ ...match, events: [...match.events, entry] }, true);
     setPendingDetail(null);
   }
@@ -921,7 +944,9 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
 
   const selectedPlayer = selectedPlayerId ? playerById(selectedPlayerId) : null;
   const isGoalkeeperSelected = !!selectedPlayer && GOALKEEPER_NUMBERS.includes(String(selectedPlayer.number));
-  const visibleEventTypes = EVENT_TYPES.filter((ev) => ev.group !== "portero" || isGoalkeeperSelected);
+  const visibleEventTypes = EVENT_TYPES.filter(
+    (ev) => !ev.hidden && (ev.group !== "portero" || isGoalkeeperSelected)
+  );
 
   const golesFavor = match.events.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
   const golesContra =
@@ -965,6 +990,15 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                 className="mp-btn mp-btn-primary px-3 py-2 text-xs font-semibold"
               >
                 {match.clock.running ? "Pausar" : "Reanudar"}
+              </button>
+            )}
+            {(match.half === 1 || match.half === 2) && (
+              <button
+                onClick={resetClock}
+                className="mp-btn mp-btn-outline px-3 py-2 text-xs"
+                style={{ color: "var(--crimson)" }}
+              >
+                Reiniciar
               </button>
             )}
             {match.half === 1 && (
@@ -2303,7 +2337,9 @@ function PlayerChartsScreen({ players, events, teamEvents, onBack }) {
    Pantalla: Balón parado
 --------------------------------------------------------- */
 function cornerConcededCount(match) {
-  return (match.concededSetPieces || []).filter((e) => (e.origin || "corner") === "corner").length;
+  const legacy = (match.concededSetPieces || []).filter((e) => (e.origin || "corner") === "corner").length;
+  const fromGoalkeeperEvent = match.events.filter((e) => e.type === "gol_encajado" && e.origen === "corner").length;
+  return legacy + fromGoalkeeperEvent;
 }
 
 function SetPieceStats({ matches, onBack }) {
