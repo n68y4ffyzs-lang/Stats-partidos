@@ -64,8 +64,8 @@ const EVENT_TYPES = [
   { id: "asistencia", label: "Asistencia", group: "ataque" },
   { id: "remate_puerta", label: "Remate a puerta", group: "ataque" },
   { id: "remate_fuera", label: "Remate fuera", group: "ataque" },
-  { id: "regate", label: "Regate", group: "ataque" },
-  { id: "regate_fallado", label: "Regate fallado", group: "ataque" },
+  { id: "regate", label: "Regate", group: "ataque", chipCls: "chip-white" },
+  { id: "regate_fallado", label: "Regate fallado", group: "ataque", chipCls: "chip-white" },
   { id: "pase_clave", label: "Pase clave", group: "posesion" },
   { id: "perdida", label: "Pérdida de balón", group: "posesion" },
   { id: "recuperacion", label: "Recuperación", group: "posesion" },
@@ -158,6 +158,13 @@ const GROUP_META = {
 };
 
 const EVENT_LABEL = Object.fromEntries(EVENT_TYPES.map((e) => [e.id, e.label]));
+
+// Color de la pestaña de un evento: el propio evento puede definir un color distinto al de su grupo
+function eventChipCls(typeId) {
+  const ev = EVENT_TYPES.find((e) => e.id === typeId);
+  if (!ev) return "";
+  return ev.chipCls || GROUP_META[ev.group].cls;
+}
 
 /* ---------------------------------------------------------
    Utilidades
@@ -317,6 +324,7 @@ function GlobalStyles() {
       .chip-amber { border-left: 4px solid var(--amber); }
       .chip-crimson { border-left: 4px solid var(--crimson); }
       .chip-violet { border-left: 4px solid var(--violet); }
+      .chip-white { border-left: 4px solid var(--chalk); }
       .mp-input {
         background: var(--pitch);
         border: 1px solid rgba(244,241,232,0.2);
@@ -1231,7 +1239,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
                 key={ev.id}
                 disabled={!selectedPlayerId}
                 onClick={() => addEvent(ev.id)}
-                className={`mp-card ${GROUP_META[ev.group].cls} px-3 py-2.5 text-sm text-left disabled:opacity-30`}
+                className={`mp-card ${eventChipCls(ev.id)} px-3 py-2.5 text-sm text-left disabled:opacity-30`}
               >
                 {ev.label}
               </button>
@@ -1246,7 +1254,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
             )}
             {timeline.map((t) =>
               t.kind === "event" ? (
-                <div key={t.id} className={`mp-card ${GROUP_META[EVENT_TYPES.find((e) => e.id === t.type).group].cls} p-2.5 flex items-center justify-between`}>
+                <div key={t.id} className={`mp-card ${eventChipCls(t.type)} p-2.5 flex items-center justify-between`}>
                   <span className="text-sm">
                     <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
                     #{t.playerNumber} {t.playerName} — {EVENT_LABEL[t.type]}
@@ -2257,7 +2265,7 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
     {
       title: "Regates",
       segments: [
-        { label: "Acertados", value: count("regate"), color: "var(--chalk)" },
+        { label: "Acertados", value: count("regate"), color: "var(--turf)" },
         { label: "Fallados", value: count("regate_fallado"), color: "var(--crimson)" },
       ],
     },
