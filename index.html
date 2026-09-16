@@ -1626,7 +1626,11 @@ function TeamEventsPanel({ match, onUpdate }) {
 /* ---------------------------------------------------------
    Pantalla: Resumen
 --------------------------------------------------------- */
-function MatchSummary({ match, onBack, onExport }) {
+function MatchSummary({ match, squad, onBack, onExport }) {
+  const [tab, setTab] = useState("resumen");
+  const [showPlayerStats, setShowPlayerStats] = useState(false);
+  const [chartsTab, setChartsTab] = useState("jugadores");
+
   const stats = {};
   match.events.forEach((e) => {
     if (!stats[e.playerId]) {
@@ -1637,9 +1641,18 @@ function MatchSummary({ match, onBack, onExport }) {
   const rows = Object.values(stats).sort((a, b) => Number(a.number) - Number(b.number));
   const usedTypes = EVENT_TYPES.filter((ev) => rows.some((r) => r.counts[ev.id]));
 
+  const rosterIds = [...new Set([...(match.onPitch || []), ...(match.bench || [])])];
+  const rosterPlayers = rosterIds
+    .filter((id) => squad.some((p) => p.id === id))
+    .map((id) => squad.find((p) => p.id === id));
+
+  const golesFavor = match.events.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
+  const golesContra =
+    (match.concededSetPieces || []).length + match.events.filter((e) => e.type === "gol_encajado").length;
+
   return (
-    <div className="max-w-md mx-auto p-4 pb-10">
-      <div className="flex items-center gap-3 mb-4 pt-2">
+    <div className="max-w-4xl mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-3 pt-2">
         <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
           Volver
         </button>
@@ -1651,55 +1664,140 @@ function MatchSummary({ match, onBack, onExport }) {
         </div>
       </div>
 
-      <button
-        onClick={onExport}
-        className="mp-btn mp-btn-primary w-full py-3 font-semibold mb-5"
-      >
-        Descargar CSV del partido
-      </button>
+      <div className="text-center mb-4">
+        <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--chalk-dim)" }}>
+          Resultado final
+        </div>
+        <div className="display text-4xl font-bold tabular-nums leading-none">
+          {golesFavor} - {golesContra}
+        </div>
+      </div>
 
-      {rows.length === 0 ? (
-        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-          No se registró ningún evento en este partido.
-        </div>
-      ) : (
-        <div className="mp-scroll overflow-x-auto">
-          <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th className="text-left p-2" style={{ color: "var(--chalk-dim)" }}>Jugador</th>
-                {usedTypes.map((ev) => (
-                  <th key={ev.id} className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>
-                    {ev.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.number + r.name} className="mp-card">
-                  <td className="p-2 whitespace-nowrap">#{r.number} {r.name}</td>
-                  {usedTypes.map((ev) => (
-                    <td key={ev.id} className="text-center p-2">{r.counts[ev.id] || "–"}</td>
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setTab("resumen")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "resumen" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Resumen
+        </button>
+        <button
+          onClick={() => setTab("estadisticas")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "estadisticas" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Estadísticas
+        </button>
+        <button
+          onClick={() => setTab("graficos")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "graficos" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Gráficos
+        </button>
+      </div>
+
+      {tab === "resumen" && (
+        <React.Fragment>
+          <button
+            onClick={onExport}
+            className="mp-btn mp-btn-primary w-full py-3 font-semibold mb-5"
+          >
+            Descargar CSV del partido
+          </button>
+
+          {rows.length === 0 ? (
+            <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+              No se registró ningún evento en este partido.
+            </div>
+          ) : (
+            <div className="mp-scroll overflow-x-auto">
+              <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th className="text-left p-2" style={{ color: "var(--chalk-dim)" }}>Jugador</th>
+                    {usedTypes.map((ev) => (
+                      <th key={ev.id} className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>
+                        {ev.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.number + r.name} className="mp-card">
+                      <td className="p-2 whitespace-nowrap">#{r.number} {r.name}</td>
+                      {usedTypes.map((ev) => (
+                        <td key={ev.id} className="text-center p-2">{r.counts[ev.id] || "–"}</td>
+                      ))}
+                    </tr>
                   ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {match.subs.length > 0 && (
+            <div className="mt-5">
+              <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Cambios</div>
+              <div className="flex flex-col gap-2">
+                {match.subs.map((s) => (
+                  <div key={s.id} className="mp-card chip-cielo p-2.5 text-sm">
+                    {s.minute}' — Sale #{s.outNumber} {s.outName}, entra #{s.inNumber} {s.inName}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </React.Fragment>
       )}
 
-      {match.subs.length > 0 && (
-        <div className="mt-5">
-          <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Cambios</div>
-          <div className="flex flex-col gap-2">
-            {match.subs.map((s) => (
-              <div key={s.id} className="mp-card chip-cielo p-2.5 text-sm">
-                {s.minute}' — Sale #{s.outNumber} {s.outName}, entra #{s.inNumber} {s.inName}
-              </div>
-            ))}
+      {tab === "estadisticas" && (
+        <React.Fragment>
+          {match.events.length === 0 ? (
+            <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+              No se registró ningún evento en este partido.
+            </div>
+          ) : (
+            <MatchTotals events={match.events} teamEvents={match.teamEvents || []} />
+          )}
+
+          <button
+            onClick={() => setShowPlayerStats((v) => !v)}
+            className="mp-btn mp-btn-outline w-full py-2.5 text-sm mt-4 mb-2"
+          >
+            {showPlayerStats ? "Ocultar estadísticas por jugador" : "Ver estadísticas por jugador"}
+          </button>
+          {showPlayerStats && (
+            <PlayerStatsAccordion players={rosterPlayers} events={match.events} />
+          )}
+        </React.Fragment>
+      )}
+
+      {tab === "graficos" && (
+        <React.Fragment>
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => setChartsTab("jugadores")}
+              className="mp-btn px-3 py-2 text-sm flex-1"
+              style={chartsTab === "jugadores" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+            >
+              Jugadores
+            </button>
+            <button
+              onClick={() => setChartsTab("equipo")}
+              className="mp-btn px-3 py-2 text-sm flex-1"
+              style={chartsTab === "equipo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+            >
+              Equipo
+            </button>
           </div>
-        </div>
+          {chartsTab === "jugadores" ? (
+            <PlayerStatsCharts players={rosterPlayers} events={match.events} />
+          ) : (
+            <TeamStatsCharts events={match.events} teamEvents={match.teamEvents || []} />
+          )}
+        </React.Fragment>
       )}
     </div>
   );
@@ -2842,7 +2940,7 @@ function App() {
         />
       )}
       {view === "summary" && match && (
-        <MatchSummary match={match} onBack={goHome} onExport={exportCSV} />
+        <MatchSummary match={match} squad={data.squad} onBack={goHome} onExport={exportCSV} />
       )}
       {view === "season" && (
         <SeasonStats
