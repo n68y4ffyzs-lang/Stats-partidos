@@ -1077,7 +1077,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
           className="mp-btn px-3 py-2 text-sm flex-1"
           style={tab === "jugadores" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
         >
-          Jugadores
+          Jugadores y equipo
         </button>
         <button
           onClick={() => setTab("estadisticas")}
@@ -1093,21 +1093,10 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         >
           Campo
         </button>
-        <button
-          onClick={() => setTab("equipo")}
-          className="mp-btn px-3 py-2 text-sm flex-1"
-          style={tab === "equipo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-        >
-          Eventos de equipo
-        </button>
       </div>
 
       {tab === "campo" && (
         <FieldFormation match={match} squad={squad} playerById={playerById} onUpdate={onUpdate} />
-      )}
-
-      {tab === "equipo" && (
-        <TeamEventsPanel match={match} onUpdate={onUpdate} />
       )}
 
       {tab === "estadisticas" && (
@@ -1135,9 +1124,9 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         </React.Fragment>
       )}
 
-      {/* Layout horizontal: en el campo a la izquierda, eventos + cronología a la derecha */}
+      {/* Layout horizontal: en el campo a la izquierda, eventos + cronología en medio, eventos de equipo a la derecha */}
       {tab === "jugadores" && (
-      <div className="lg:grid lg:grid-cols-[260px_1fr] lg:gap-4 lg:items-start">
+      <div className="lg:grid lg:grid-cols-[260px_1fr_280px] lg:gap-4 lg:items-start">
         <div className="mb-4 lg:mb-0">
           <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
             En el campo — toca para seleccionar
@@ -1280,6 +1269,11 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
               )
             )}
           </div>
+        </div>
+
+        <div className="mt-4 lg:mt-0">
+          <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Eventos de equipo</div>
+          <TeamEventsPanel match={match} onUpdate={onUpdate} />
         </div>
       </div>
       )}
