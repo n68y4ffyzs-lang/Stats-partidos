@@ -2125,8 +2125,14 @@ function PlayerBarChart({ title, color, rows, labelWidth = "w-20" }) {
                 style={{ width: `${max === 0 ? 0 : (r.raw / max) * 100}%`, background: color }}
               />
             </div>
-            <div className="text-xs w-9 text-right shrink-0" style={{ fontVariantNumeric: "tabular-nums" }}>
-              {r.display}
+            <div
+              className="text-xs text-right shrink-0 flex flex-col items-end leading-tight"
+              style={{ fontVariantNumeric: "tabular-nums", minWidth: r.sub ? "3.75rem" : "2.25rem" }}
+            >
+              <span>{r.display}</span>
+              {r.sub && (
+                <span className="text-[10px]" style={{ color: "var(--chalk-dim)" }}>{r.sub}</span>
+              )}
             </div>
           </div>
         ))}
@@ -2251,7 +2257,7 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
     {
       title: "Regates",
       segments: [
-        { label: "Acertados", value: count("regate"), color: "var(--turf)" },
+        { label: "Acertados", value: count("regate"), color: "var(--chalk)" },
         { label: "Fallados", value: count("regate_fallado"), color: "var(--crimson)" },
       ],
     },
@@ -2332,11 +2338,32 @@ function PlayerStatsCharts({ players, events }) {
       .sort((a, b) => b.raw - a.raw);
   }
 
+  // Como rowsFor, pero además añade debajo del porcentaje el número real de aciertos sobre el total
+  function rowsForPct(pctPick, wonPick, totalPick) {
+    return withStats
+      .map(({ p, s }) => {
+        const raw = pctPick(s) || 0;
+        const won = wonPick(s) || 0;
+        const total = totalPick(s) || 0;
+        return { label: p.name, raw, display: `${raw}%`, sub: total > 0 ? `${won} de ${total}` : null };
+      })
+      .filter((r) => r.raw > 0)
+      .sort((a, b) => b.raw - a.raw);
+  }
+
   const charts = [
     { title: "Goles", color: "var(--turf)", rows: rowsFor((s) => s.goles) },
     { title: "Asistencias", color: "var(--turf)", rows: rowsFor((s) => s.asistencias) },
-    { title: "Duelos ganados", color: "var(--cielo)", rows: rowsFor((s) => s.duelosPct, (v) => `${v}%`) },
-    { title: "Regates acertados", color: "var(--cielo)", rows: rowsFor((s) => s.regatesPct, (v) => `${v}%`) },
+    {
+      title: "Duelos ganados",
+      color: "var(--cielo)",
+      rows: rowsForPct((s) => s.duelosPct, (s) => s.duelosGanados, (s) => s.duelosTotales),
+    },
+    {
+      title: "Regates acertados",
+      color: "var(--cielo)",
+      rows: rowsForPct((s) => s.regatesPct, (s) => s.regatesOk, (s) => s.regatesTotales),
+    },
     { title: "Recuperaciones", color: "var(--cielo)", rows: rowsFor((s) => s.robos) },
     { title: "Balones perdidos", color: "var(--crimson)", rows: rowsFor((s) => s.perdidas) },
     { title: "Paradas (portero)", color: "var(--violet)", rows: rowsFor((s) => s.paradas) },
