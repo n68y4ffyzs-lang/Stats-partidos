@@ -212,7 +212,7 @@ const TEAM_CODE_KEY = "rp_team_code";
 const DEVICE_ID_KEY = "rp_device_id";
 
 function emptyData() {
-  return { squad: [], matchesList: [], matchesById: {}, updatedAt: 0 };
+  return { squad: [], matchesList: [], matchesById: {}, setPiecePositions: {}, updatedAt: 0 };
 }
 
 function loadLocalData() {
@@ -224,6 +224,7 @@ function loadLocalData() {
       squad: parsed.squad || [],
       matchesList: parsed.matchesList || [],
       matchesById: parsed.matchesById || {},
+      setPiecePositions: parsed.setPiecePositions || {},
       updatedAt: parsed.updatedAt || 0,
     };
   } catch (e) {
@@ -2557,7 +2558,246 @@ function cornerConcededCount(match) {
   return legacy + fromGoalkeeperEvent;
 }
 
-function SetPieceStats({ matches, onBack }) {
+/* ---------------------------------------------------------
+   Medio campo: colocar a cada jugador según su posición
+   en las jugadas de balón parado (córner o falta, a favor o en contra)
+--------------------------------------------------------- */
+function SetPieceBoard({ positions, squad, onSave }) {
+  const [selectedId, setSelectedId] = useState(null);
+  const pitchRef = useRef(null);
+
+  function playerById(id) {
+    return squad.find((p) => p.id === id) || { id, number: "?", name: "Desconocido" };
+  }
+
+  const placedIds = squad.map((p) => p.id).filter((id) => positions[id]);
+  const unplacedIds = squad.map((p) => p.id).filter((id) => !positions[id]);
+
+  function setPosition(playerId, coords) {
+    onSave({ ...positions, [playerId]: coords });
+  }
+
+  function clearPosition(playerId) {
+    const next = { ...positions };
+    delete next[playerId];
+    onSave(next);
+  }
+
+  function handleSelect(id) {
+    setSelectedId((prev) => (prev === id ? null : id));
+  }
+
+  function handlePitchClick(e) {
+    if (!selectedId || !pitchRef.current) return;
+    const rect = pitchRef.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setPosition(selectedId, {
+      x: Math.min(97, Math.max(3, x)),
+      y: Math.min(94, Math.max(3, y)),
+    });
+    setSelectedId(null);
+  }
+
+  if (squad.length === 0) {
+    return (
+      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+        Añade jugadores a la plantilla para poder colocarlos en el campo.
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        {selectedId
+          ? `Toca el campo para colocar a ${playerById(selectedId).name}`
+          : "Toca un jugador y luego el campo para colocarlo"}
+      </div>
+
+      <div
+        ref={pitchRef}
+        onClick={handlePitchClick}
+        className="relative w-full mx-auto mb-3"
+        style={{
+          maxWidth: 380,
+          aspectRatio: "68 / 52",
+          background: "#2E7D32",
+          borderRadius: 12,
+          border: "2px solid rgba(255,255,255,0.55)",
+          overflow: "hidden",
+        }}
+      >
+        {/* Portería */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            width: "22%",
+            height: "3%",
+            marginLeft: "-11%",
+            background: "rgba(255,255,255,0.55)",
+          }}
+        />
+        {/* Área pequeña */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            width: "30%",
+            height: "20%",
+            marginLeft: "-15%",
+            border: "2px solid rgba(255,255,255,0.55)",
+            borderTop: "none",
+          }}
+        />
+        {/* Área grande */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            width: "62%",
+            height: "42%",
+            marginLeft: "-31%",
+            border: "2px solid rgba(255,255,255,0.55)",
+            borderTop: "none",
+          }}
+        />
+        {/* Semicírculo del área */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "42%",
+            width: "28%",
+            aspectRatio: "1 / 0.5",
+            marginLeft: "-14%",
+            border: "2px solid rgba(255,255,255,0.55)",
+            borderTop: "none",
+            borderRadius: "0 0 999px 999px",
+          }}
+        />
+        {/* Línea de medio campo */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 2,
+            background: "rgba(255,255,255,0.55)",
+          }}
+        />
+        {/* Banderines de córner */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: 14,
+            height: 14,
+            borderBottom: "2px solid rgba(255,255,255,0.55)",
+            borderRight: "2px solid rgba(255,255,255,0.55)",
+            borderRadius: "0 0 14px 0",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: 0,
+            width: 14,
+            height: 14,
+            borderBottom: "2px solid rgba(255,255,255,0.55)",
+            borderLeft: "2px solid rgba(255,255,255,0.55)",
+            borderRadius: "0 0 0 14px",
+          }}
+        />
+
+        {placedIds.map((id) => {
+          const p = playerById(id);
+          const pos = positions[id];
+          const selected = selectedId === id;
+          return (
+            <button
+              key={id}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleSelect(id);
+              }}
+              className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+              style={{
+                position: "absolute",
+                left: `${pos.x}%`,
+                top: `${pos.y}%`,
+                transform: "translate(-50%, -50%)",
+              }}
+            >
+              {p.number}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedId && placedIds.includes(selectedId) && (
+        <button
+          onClick={() => {
+            clearPosition(selectedId);
+            setSelectedId(null);
+          }}
+          className="mp-btn mp-btn-outline w-full py-2 text-xs mb-3"
+          style={{ color: "var(--crimson)" }}
+        >
+          Quitar del campo a {playerById(selectedId).name}
+        </button>
+      )}
+
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Jugadores</div>
+      <div className="flex flex-wrap gap-2">
+        {unplacedIds.length === 0 && (
+          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Todos los jugadores están colocados en el campo.
+          </span>
+        )}
+        {unplacedIds.map((id) => {
+          const p = playerById(id);
+          const selected = selectedId === id;
+          return (
+            <div key={id} className="flex flex-col items-center gap-1" style={{ width: 56 }}>
+              <button
+                onClick={() => handleSelect(id)}
+                className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+              >
+                {p.number}
+              </button>
+              <span className="text-[10px] text-center leading-tight" style={{ color: "var(--chalk-dim)" }}>
+                {p.name.split(" ")[0]}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const SET_PIECE_SIDES = [
+  { id: "favor", label: "A favor" },
+  { id: "contra", label: "En contra" },
+];
+const SET_PIECE_TYPES = [
+  { id: "corner", label: "Córners" },
+  { id: "falta", label: "Faltas" },
+];
+
+function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositions, onBack }) {
+  const [spSide, setSpSide] = useState("favor");
+  const [spType, setSpType] = useState("corner");
+  const spCategory = `${spSide}_${spType}`;
+
   const allEvents = matches.flatMap((m) => m.events);
   const countType = (type) => allEvents.filter((e) => e.type === type).length;
 
@@ -2627,6 +2867,41 @@ function SetPieceStats({ matches, onBack }) {
           ))}
         </div>
       )}
+
+      <h2 className="text-sm uppercase tracking-wide mt-6 mb-2" style={{ color: "var(--chalk-dim)" }}>
+        Posiciones a balón parado
+      </h2>
+      <div className="flex gap-2 mb-2">
+        {SET_PIECE_SIDES.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setSpSide(s.id)}
+            className="mp-btn px-3 py-2 text-sm flex-1"
+            style={spSide === s.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2 mb-3">
+        {SET_PIECE_TYPES.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setSpType(t.id)}
+            className="mp-btn px-3 py-2 text-sm flex-1"
+            style={spType === t.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <SetPieceBoard
+        key={spCategory}
+        positions={setPiecePositions[spCategory] || {}}
+        squad={squad}
+        onSave={(positions) => onSaveSetPiecePositions(spCategory, positions)}
+      />
     </div>
   );
 }
@@ -2824,6 +3099,13 @@ function App() {
     commit({ ...dataRef.current, squad: updatedSquad });
   }
 
+  function saveSetPiecePositions(category, positions) {
+    commit({
+      ...dataRef.current,
+      setPiecePositions: { ...(dataRef.current.setPiecePositions || {}), [category]: positions },
+    });
+  }
+
   function goHome() {
     setMatch(null);
     setView("home");
@@ -2988,7 +3270,13 @@ function App() {
         />
       )}
       {view === "setpieces" && (
-        <SetPieceStats matches={Object.values(data.matchesById)} onBack={goHome} />
+        <SetPieceStats
+          matches={Object.values(data.matchesById)}
+          squad={data.squad}
+          setPiecePositions={data.setPiecePositions || {}}
+          onSaveSetPiecePositions={saveSetPiecePositions}
+          onBack={goHome}
+        />
       )}
       {view === "sync" && (
         <SyncSettings
