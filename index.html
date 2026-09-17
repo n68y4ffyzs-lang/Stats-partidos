@@ -205,6 +205,12 @@ function halfLabel(match) {
   return match.half === 1 ? "1ª parte" : "2ª parte";
 }
 
+function matchBadge(m) {
+  if (m.scheduled) return { label: "Programado", bg: "rgba(62,146,204,0.18)", color: "var(--cielo)" };
+  if (m.finished) return { label: "Finalizado", bg: "rgba(111,190,68,0.15)", color: "var(--turf)" };
+  return { label: "En juego", bg: "rgba(227,167,45,0.18)", color: "var(--amber)" };
+}
+
 /* ---------------------------------------------------------
    Almacenamiento local + sincronización con Supabase
 --------------------------------------------------------- */
@@ -689,7 +695,137 @@ function LeagueStandings() {
 /* ---------------------------------------------------------
    Pantalla: Inicio
 --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   Calendario: cada partido en su día/mes, incluidos los futuros
+--------------------------------------------------------- */
+const CALENDAR_WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
+
+function MatchCalendar({ matches, onOpenMatch }) {
+  const [cursor, setCursor] = useState(() => {
+    const [y, m] = todayISO().split("-").map(Number);
+    return { year: y, month: m - 1 };
+  });
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  const matchesByDate = {};
+  matches.forEach((m) => {
+    (matchesByDate[m.date] = matchesByDate[m.date] || []).push(m);
+  });
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const first = new Date(cursor.year, cursor.month, 1);
+  const startWeekday = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const isoFor = (d) => `${cursor.year}-${pad(cursor.month + 1)}-${pad(d)}`;
+  const monthLabel = first.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+  const todayIso = todayISO();
+
+  function shiftMonth(delta) {
+    setSelectedDate(null);
+    setCursor((c) => {
+      let month = c.month + delta;
+      let year = c.year;
+      if (month < 0) { month = 11; year -= 1; }
+      if (month > 11) { month = 0; year += 1; }
+      return { year, month };
+    });
+  }
+
+  function dotColor(dayMatches) {
+    if (dayMatches.some((m) => !m.finished && !m.scheduled)) return "var(--amber)";
+    if (dayMatches.some((m) => m.scheduled)) return "var(--cielo)";
+    return "var(--turf)";
+  }
+
+  const selectedMatches = selectedDate ? matchesByDate[selectedDate] || [] : [];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <button onClick={() => shiftMonth(-1)} className="mp-btn mp-btn-outline px-3 py-1.5 text-sm">
+          ‹
+        </button>
+        <div className="text-sm font-semibold capitalize">{monthLabel}</div>
+        <button onClick={() => shiftMonth(1)} className="mp-btn mp-btn-outline px-3 py-1.5 text-sm">
+          ›
+        </button>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1 mb-1">
+        {CALENDAR_WEEKDAYS.map((d) => (
+          <div key={d} className="text-center text-[10px]" style={{ color: "var(--chalk-dim)" }}>
+            {d}
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-1 mb-2">
+        {cells.map((d, i) => {
+          if (d === null) return <div key={i} />;
+          const iso = isoFor(d);
+          const dayMatches = matchesByDate[iso] || [];
+          const hasMatch = dayMatches.length > 0;
+          const isToday = iso === todayIso;
+          const selected = iso === selectedDate;
+          return (
+            <button
+              key={i}
+              onClick={() => hasMatch && setSelectedDate(selected ? null : iso)}
+              className="mp-card flex flex-col items-center justify-center gap-0.5 py-1.5 text-xs"
+              style={{
+                borderColor: selected ? "var(--turf)" : isToday ? "var(--cielo)" : undefined,
+                opacity: hasMatch ? 1 : 0.4,
+              }}
+            >
+              <span>{d}</span>
+              <span
+                className="mp-dot"
+                style={{ width: 5, height: 5, background: hasMatch ? dotColor(dayMatches) : "transparent" }}
+              />
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedDate && (
+        <div className="flex flex-col gap-2 mp-fade-in">
+          {selectedMatches.map((m) => {
+            const badge = matchBadge(m);
+            return (
+              <button
+                key={m.id}
+                onClick={() => onOpenMatch(m.id)}
+                className="mp-card p-3 text-left flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold truncate">vs {m.opponent}</div>
+                  <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
+                </div>
+                <span
+                  className="text-xs px-2 py-1 rounded-full whitespace-nowrap shrink-0"
+                  style={{ background: badge.bg, color: badge.color }}
+                >
+                  {badge.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGoSeason, onGoSetPieces, onGoCharts, squadCount, syncStatus, onGoSync }) {
+  const [search, setSearch] = useState("");
+  const [matchesTab, setMatchesTab] = useState("lista");
+
+  const filteredMatches = matches.filter((m) =>
+    m.opponent.toLowerCase().includes(search.trim().toLowerCase())
+  );
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-3 pt-2">
@@ -736,46 +872,80 @@ function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGo
         Partidos
       </h2>
 
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Buscar por rival…"
+        className="mp-input px-3 py-2 w-full mb-2"
+      />
+
+      <div className="flex gap-2 mb-3">
+        <button
+          onClick={() => setMatchesTab("lista")}
+          className="mp-btn px-3 py-1.5 text-sm flex-1"
+          style={matchesTab === "lista" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Lista
+        </button>
+        <button
+          onClick={() => setMatchesTab("calendario")}
+          className="mp-btn px-3 py-1.5 text-sm flex-1"
+          style={matchesTab === "calendario" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Calendario
+        </button>
+      </div>
+
       {matches.length === 0 && (
         <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
           Aún no hay partidos registrados. Crea uno cuando empiece el próximo.
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        {matches
-          .slice()
-          .sort((a, b) => (a.date < b.date ? 1 : -1))
-          .map((m) => (
-            <div key={m.id} className="mp-card p-3 flex items-center gap-2">
-              <button
-                onClick={() => onOpenMatch(m.id)}
-                className="flex-1 min-w-0 text-left flex items-center justify-between gap-2"
-              >
-                <div className="min-w-0">
-                  <div className="font-semibold truncate">vs {m.opponent}</div>
-                  <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
+      {matches.length > 0 && filteredMatches.length === 0 && (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          Ningún partido coincide con "{search}".
+        </div>
+      )}
+
+      {matchesTab === "lista" ? (
+        <div className="flex flex-col gap-2">
+          {filteredMatches
+            .slice()
+            .sort((a, b) => (a.date < b.date ? 1 : -1))
+            .map((m) => {
+              const badge = matchBadge(m);
+              return (
+                <div key={m.id} className="mp-card p-3 flex items-center gap-2">
+                  <button
+                    onClick={() => onOpenMatch(m.id)}
+                    className="flex-1 min-w-0 text-left flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">vs {m.opponent}</div>
+                      <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
+                    </div>
+                    <span
+                      className="text-xs px-2 py-1 rounded-full whitespace-nowrap"
+                      style={{ background: badge.bg, color: badge.color }}
+                    >
+                      {badge.label}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => onDeleteMatch(m.id, m.opponent)}
+                    className="text-xs px-2 py-1 shrink-0"
+                    style={{ color: "var(--crimson)" }}
+                  >
+                    Eliminar
+                  </button>
                 </div>
-                <span
-                  className="text-xs px-2 py-1 rounded-full whitespace-nowrap"
-                  style={{
-                    background: m.finished ? "rgba(111,190,68,0.15)" : "rgba(227,167,45,0.18)",
-                    color: m.finished ? "var(--turf)" : "var(--amber)",
-                  }}
-                >
-                  {m.finished ? "Finalizado" : "En juego"}
-                </span>
-              </button>
-              <button
-                onClick={() => onDeleteMatch(m.id, m.opponent)}
-                className="text-xs px-2 py-1 shrink-0"
-                style={{ color: "var(--crimson)" }}
-              >
-                Eliminar
-              </button>
-            </div>
-          ))}
-      </div>
+              );
+            })}
+        </div>
+      ) : (
+        filteredMatches.length > 0 && <MatchCalendar matches={filteredMatches} onOpenMatch={onOpenMatch} />
+      )}
     </div>
   );
 }
@@ -876,6 +1046,8 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
   const [halfLength, setHalfLength] = useState(45);
   const [titulares, setTitulares] = useState([]);
 
+  const isFuture = date > todayISO();
+
   function toggle(id) {
     setTitulares((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
@@ -883,7 +1055,7 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
   }
 
   function submit() {
-    if (!opponent.trim() || titulares.length === 0) return;
+    if (!opponent.trim() || (!isFuture && titulares.length === 0)) return;
     onCreate({ opponent: opponent.trim(), date, halfLength: Number(halfLength) || 45, titulares });
   }
 
@@ -945,9 +1117,18 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
         </div>
       </div>
 
+      {isFuture && (
+        <div className="mp-card p-3 mb-4 text-xs" style={{ color: "var(--chalk-dim)" }}>
+          Esta fecha es futura: el partido se guardará como <span style={{ color: "var(--cielo)" }}>programado</span> en
+          el calendario. Podrás elegir el once inicial y empezarlo cuando llegue el día.
+        </div>
+      )}
+
       <div className="mp-card p-3 mb-4">
         <div className="flex items-center justify-between mb-2">
-          <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Once inicial</label>
+          <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Once inicial{isFuture ? " (opcional por ahora)" : ""}
+          </label>
           <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{titulares.length} seleccionados</span>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -973,10 +1154,86 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
 
       <button
         onClick={submit}
-        disabled={!opponent.trim() || titulares.length === 0}
+        disabled={!opponent.trim() || (!isFuture && titulares.length === 0)}
         className="mp-btn mp-btn-primary w-full py-3 font-semibold disabled:opacity-40"
       >
+        {isFuture ? "Programar partido" : "Empezar partido"}
+      </button>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Partido programado (aún no empezado)
+--------------------------------------------------------- */
+function ScheduledMatch({ match, squad, onStart, onDelete, onBack }) {
+  const [titulares, setTitulares] = useState(match.onPitch || []);
+
+  function toggle(id) {
+    setTitulares((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-4 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <div>
+          <h1 className="display text-2xl font-semibold">vs {match.opponent}</h1>
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{match.date}</div>
+        </div>
+      </div>
+
+      <div className="mp-card p-3 mb-4 text-sm" style={{ color: "var(--cielo)" }}>
+        Partido programado. Elige el once inicial y pulsa "Empezar partido" cuando llegue el día.
+      </div>
+
+      {squad.length === 0 ? (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          Primero necesitas añadir jugadores a la plantilla.
+        </div>
+      ) : (
+        <div className="mp-card p-3 mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Once inicial</label>
+            <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{titulares.length} seleccionados</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {squad
+              .slice()
+              .sort((a, b) => Number(a.number) - Number(b.number))
+              .map((p) => {
+                const active = titulares.includes(p.id);
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => toggle(p.id)}
+                    className="mp-btn px-3 py-2 text-sm flex items-center gap-2"
+                    style={active ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+                  >
+                    <span className="font-semibold">{p.number}</span>
+                    <span>{p.name}</span>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={() => onStart(titulares)}
+        disabled={titulares.length === 0}
+        className="mp-btn mp-btn-primary w-full py-3 font-semibold disabled:opacity-40 mb-2"
+      >
         Empezar partido
+      </button>
+      <button
+        onClick={onDelete}
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm"
+        style={{ color: "var(--crimson)" }}
+      >
+        Eliminar partido programado
       </button>
     </div>
   );
@@ -3513,6 +3770,7 @@ function App() {
 
   function createMatch({ opponent, date, halfLength, titulares }) {
     const squad = dataRef.current.squad;
+    const scheduled = date > todayISO();
     const bench = squad.filter((p) => !titulares.includes(p.id)).map((p) => p.id);
     const newMatch = {
       id: genId(),
@@ -3521,6 +3779,7 @@ function App() {
       halfLength,
       half: 1,
       finished: false,
+      scheduled,
       clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
       onPitch: titulares,
       bench,
@@ -3533,14 +3792,42 @@ function App() {
     };
     const updatedList = [
       ...dataRef.current.matchesList,
-      { id: newMatch.id, opponent, date, finished: false },
+      { id: newMatch.id, opponent, date, finished: false, scheduled },
     ];
     commit({
       ...dataRef.current,
       matchesList: updatedList,
       matchesById: { ...dataRef.current.matchesById, [newMatch.id]: newMatch },
     });
-    setMatch(newMatch);
+    if (scheduled) {
+      setMatch(null);
+      setView("home");
+    } else {
+      setMatch(newMatch);
+      setView("live");
+    }
+  }
+
+  function beginScheduledMatch(titulares) {
+    const squad = dataRef.current.squad;
+    const bench = squad.filter((p) => !titulares.includes(p.id)).map((p) => p.id);
+    const updated = {
+      ...match,
+      scheduled: false,
+      half: 1,
+      onPitch: titulares,
+      bench,
+      clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
+    };
+    setMatch(updated);
+    const updatedList = dataRef.current.matchesList.map((m) =>
+      m.id === updated.id ? { ...m, scheduled: false } : m
+    );
+    commit({
+      ...dataRef.current,
+      matchesList: updatedList,
+      matchesById: { ...dataRef.current.matchesById, [updated.id]: updated },
+    });
     setView("live");
   }
 
@@ -3548,7 +3835,7 @@ function App() {
     const m = dataRef.current.matchesById[id];
     if (!m) return;
     setMatch(m);
-    setView(m.finished ? "summary" : "live");
+    setView(m.scheduled ? "scheduled" : m.finished ? "summary" : "live");
   }
 
   function deleteMatch(id, opponent) {
@@ -3639,6 +3926,15 @@ function App() {
           onCreate={createMatch}
           onBack={goHome}
           onGoSquad={() => setView("squad")}
+        />
+      )}
+      {view === "scheduled" && match && (
+        <ScheduledMatch
+          match={match}
+          squad={data.squad}
+          onStart={beginScheduledMatch}
+          onDelete={() => deleteMatch(match.id, match.opponent)}
+          onBack={goHome}
         />
       )}
       {view === "live" && match && (
