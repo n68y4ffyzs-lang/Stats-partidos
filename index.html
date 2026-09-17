@@ -2620,23 +2620,23 @@ function SetPieceBoard({ positions, squad, onSave }) {
         onClick={handlePitchClick}
         className="relative w-full mx-auto mb-3"
         style={{
-          maxWidth: 380,
-          aspectRatio: "68 / 52",
+          maxWidth: 560,
+          aspectRatio: "3 / 2",
           background: "#2E7D32",
           borderRadius: 12,
           border: "2px solid rgba(255,255,255,0.55)",
           overflow: "hidden",
         }}
       >
-        {/* Portería */}
+        {/* Portería (borde izquierdo) */}
         <div
           style={{
             position: "absolute",
-            left: "50%",
-            top: 0,
-            width: "22%",
-            height: "3%",
-            marginLeft: "-11%",
+            left: 0,
+            top: "50%",
+            width: "2.5%",
+            height: "22%",
+            marginTop: "-11%",
             background: "rgba(255,255,255,0.55)",
           }}
         />
@@ -2644,50 +2644,50 @@ function SetPieceBoard({ positions, squad, onSave }) {
         <div
           style={{
             position: "absolute",
-            left: "50%",
-            top: 0,
-            width: "30%",
-            height: "20%",
-            marginLeft: "-15%",
+            left: 0,
+            top: "50%",
+            width: "16%",
+            height: "30%",
+            marginTop: "-15%",
             border: "2px solid rgba(255,255,255,0.55)",
-            borderTop: "none",
+            borderLeft: "none",
           }}
         />
         {/* Área grande */}
         <div
           style={{
             position: "absolute",
-            left: "50%",
-            top: 0,
-            width: "62%",
-            height: "42%",
-            marginLeft: "-31%",
+            left: 0,
+            top: "50%",
+            width: "38%",
+            height: "62%",
+            marginTop: "-31%",
             border: "2px solid rgba(255,255,255,0.55)",
-            borderTop: "none",
+            borderLeft: "none",
           }}
         />
         {/* Semicírculo del área */}
         <div
           style={{
             position: "absolute",
-            left: "50%",
-            top: "42%",
-            width: "28%",
-            aspectRatio: "1 / 0.5",
-            marginLeft: "-14%",
+            left: "38%",
+            top: "50%",
+            height: "28%",
+            aspectRatio: "0.5 / 1",
+            marginTop: "-14%",
             border: "2px solid rgba(255,255,255,0.55)",
-            borderTop: "none",
-            borderRadius: "0 0 999px 999px",
+            borderLeft: "none",
+            borderRadius: "0 999px 999px 0",
           }}
         />
         {/* Línea de medio campo */}
         <div
           style={{
             position: "absolute",
-            left: 0,
-            right: 0,
+            top: 0,
             bottom: 0,
-            height: 2,
+            right: 0,
+            width: 2,
             background: "rgba(255,255,255,0.55)",
           }}
         />
@@ -2707,13 +2707,13 @@ function SetPieceBoard({ positions, squad, onSave }) {
         <div
           style={{
             position: "absolute",
-            right: 0,
-            top: 0,
+            left: 0,
+            bottom: 0,
             width: 14,
             height: 14,
-            borderBottom: "2px solid rgba(255,255,255,0.55)",
-            borderLeft: "2px solid rgba(255,255,255,0.55)",
-            borderRadius: "0 0 0 14px",
+            borderTop: "2px solid rgba(255,255,255,0.55)",
+            borderRight: "2px solid rgba(255,255,255,0.55)",
+            borderRadius: "0 14px 0 0",
           }}
         />
 
@@ -2794,6 +2794,7 @@ const SET_PIECE_TYPES = [
 ];
 
 function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositions, onBack }) {
+  const [mainTab, setMainTab] = useState("estadisticas");
   const [spSide, setSpSide] = useState("favor");
   const [spType, setSpType] = useState("corner");
   const spCategory = `${spSide}_${spType}`;
@@ -2822,7 +2823,7 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 
   return (
-    <div className="max-w-md mx-auto p-4 pb-10">
+    <div className="max-w-2xl mx-auto p-4 pb-10">
       <div className="flex items-center gap-3 mb-4 pt-2">
         <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
           Volver
@@ -2830,78 +2831,100 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
         <h1 className="display text-2xl font-semibold">Balón parado</h1>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 mb-5">
-        <StatCard label="Goles de córner" value={cornerFavor} />
-        <StatCard label="Goles de falta" value={faltaFavor} />
-        <StatCard label="Goles de penalti" value={penaltiFavor} />
-        <StatCard label="Total a balón parado" value={setPieceFavorTotal} />
-        <StatCard
-          label="% de los goles totales"
-          value={setPiecePct === null ? "–" : `${setPiecePct}%`}
-          sub={totalGoals === 0 ? "Sin goles registrados" : `${setPieceFavorTotal} de ${totalGoals} goles`}
-        />
-        <StatCard label="Goles de córner encajados" value={contraTotal} />
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setMainTab("estadisticas")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={mainTab === "estadisticas" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Estadísticas
+        </button>
+        <button
+          onClick={() => setMainTab("posiciones")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={mainTab === "posiciones" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Posiciones
+        </button>
       </div>
 
-      <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
-        Por partido
-      </h2>
+      {mainTab === "estadisticas" && (
+        <React.Fragment>
+          <div className="grid grid-cols-2 gap-2 mb-5">
+            <StatCard label="Goles de córner" value={cornerFavor} />
+            <StatCard label="Goles de falta" value={faltaFavor} />
+            <StatCard label="Goles de penalti" value={penaltiFavor} />
+            <StatCard label="Total a balón parado" value={setPieceFavorTotal} />
+            <StatCard
+              label="% de los goles totales"
+              value={setPiecePct === null ? "–" : `${setPiecePct}%`}
+              sub={totalGoals === 0 ? "Sin goles registrados" : `${setPieceFavorTotal} de ${totalGoals} goles`}
+            />
+            <StatCard label="Goles de córner encajados" value={contraTotal} />
+          </div>
 
-      {rows.length === 0 ? (
-        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-          Aún no hay goles a balón parado registrados en ningún partido.
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {rows.map((r) => (
-            <div key={r.id} className="mp-card p-3 flex items-center justify-between">
-              <div>
-                <div className="font-semibold">vs {r.opponent}</div>
-                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{r.date}</div>
-              </div>
-              <div className="text-sm text-right">
-                <div style={{ color: "var(--turf)" }}>{r.favor} a favor</div>
-                <div style={{ color: "var(--crimson)" }}>{r.contra} en contra</div>
-              </div>
+          <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
+            Por partido
+          </h2>
+
+          {rows.length === 0 ? (
+            <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+              Aún no hay goles a balón parado registrados en ningún partido.
             </div>
-          ))}
-        </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {rows.map((r) => (
+                <div key={r.id} className="mp-card p-3 flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">vs {r.opponent}</div>
+                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{r.date}</div>
+                  </div>
+                  <div className="text-sm text-right">
+                    <div style={{ color: "var(--turf)" }}>{r.favor} a favor</div>
+                    <div style={{ color: "var(--crimson)" }}>{r.contra} en contra</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </React.Fragment>
       )}
 
-      <h2 className="text-sm uppercase tracking-wide mt-6 mb-2" style={{ color: "var(--chalk-dim)" }}>
-        Posiciones a balón parado
-      </h2>
-      <div className="flex gap-2 mb-2">
-        {SET_PIECE_SIDES.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => setSpSide(s.id)}
-            className="mp-btn px-3 py-2 text-sm flex-1"
-            style={spSide === s.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-2 mb-3">
-        {SET_PIECE_TYPES.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setSpType(t.id)}
-            className="mp-btn px-3 py-2 text-sm flex-1"
-            style={spType === t.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {mainTab === "posiciones" && (
+        <React.Fragment>
+          <div className="flex gap-2 mb-2">
+            {SET_PIECE_SIDES.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSpSide(s.id)}
+                className="mp-btn px-3 py-2 text-sm flex-1"
+                style={spSide === s.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2 mb-3">
+            {SET_PIECE_TYPES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setSpType(t.id)}
+                className="mp-btn px-3 py-2 text-sm flex-1"
+                style={spType === t.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-      <SetPieceBoard
-        key={spCategory}
-        positions={setPiecePositions[spCategory] || {}}
-        squad={squad}
-        onSave={(positions) => onSaveSetPiecePositions(spCategory, positions)}
-      />
+          <SetPieceBoard
+            key={spCategory}
+            positions={setPiecePositions[spCategory] || {}}
+            squad={squad}
+            onSave={(positions) => onSaveSetPiecePositions(spCategory, positions)}
+          />
+        </React.Fragment>
+      )}
     </div>
   );
 }
