@@ -13,9 +13,10 @@ const FFCV_HEADERS = {
   Referer: "https://ffcv.es/competiciones/",
 };
 
-// Grupo de liga por defecto: Primera Cadet (Futbol-11), Grup - 1, temporada 2025-2026.
-// Actualizar este código cada temporada si el equipo cambia de grupo o categoría.
-const DEFAULT_COD_GRUPO = "29509454";
+// Grupo de liga por defecto: Primera Cadet (Futbol-11), Grup - 1, temporada 2026-2027.
+// La FFCV crea un cod_grupo nuevo cada temporada: actualizar este código a principios
+// de cada temporada (o si el equipo cambia de grupo o categoría).
+const DEFAULT_COD_GRUPO = "905431893";
 
 async function fetchJsonWithRetry(url, attempts = 4, delayMs = 900) {
   let lastError = "No se pudo obtener respuesta de la FFCV";
