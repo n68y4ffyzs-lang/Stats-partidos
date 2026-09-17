@@ -122,6 +122,7 @@ const EVENTS_WITH_DETAIL = {
   amarilla: { field: "motivo", options: CARD_REASONS, prompt: "Motivo de la tarjeta amarilla" },
   roja: { field: "motivo", options: CARD_REASONS, prompt: "Motivo de la tarjeta roja" },
   falta_cometida: { field: "zona", options: FOUL_ZONES, prompt: "¿Dónde fue la falta?" },
+  perdida: { field: "zona", options: FOUL_ZONES, prompt: "¿Dónde perdiste el balón?" },
   gol: { field: "__type__", options: GOAL_ORIGIN_OPTIONS, prompt: "¿Cómo fue el gol?" },
   gol_encajado: { field: "origen", options: GOAL_CONCEDED_ORIGIN, prompt: "¿Cómo fue el gol encajado?" },
 };
@@ -2264,17 +2265,32 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
       ],
     },
     {
-      title: "Regates",
-      segments: [
-        { label: "Acertados", value: count("regate"), color: "var(--turf)" },
-        { label: "Fallados", value: count("regate_fallado"), color: "var(--crimson)" },
-      ],
-    },
-    {
       title: "Tiros",
       segments: [
         { label: "A puerta", value: count("remate_puerta"), color: "var(--turf)" },
         { label: "Fuera", value: count("remate_fuera"), color: "var(--amber)" },
+      ],
+    },
+    {
+      title: "Recuperaciones y pérdidas",
+      segments: [
+        { label: "Recuperado", value: count("recuperacion"), color: "var(--turf)" },
+        { label: "Perdido", value: count("perdida"), color: "var(--crimson)" },
+      ],
+    },
+    {
+      title: "Zona de las pérdidas de balón",
+      segments: [
+        {
+          label: "Campo propio",
+          value: events.filter((e) => e.type === "perdida" && e.zona === "propio").length,
+          color: "var(--cielo)",
+        },
+        {
+          label: "Campo rival",
+          value: events.filter((e) => e.type === "perdida" && e.zona === "rival").length,
+          color: "var(--amber)",
+        },
       ],
     },
     {
@@ -2334,8 +2350,13 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
   );
 }
 
-function PlayerStatsCharts({ players, events }) {
-  const withStats = players.map((p) => ({ p, s: computePlayerStats(p.id, events) }));
+function PlayerStatsCharts({ players, events, matches }) {
+  const withStats = players.map((p) => {
+    const matchesPlayed = matches
+      ? matches.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length
+      : 0;
+    return { p, s: computePlayerStats(p.id, events), matchesPlayed };
+  });
 
   function rowsFor(pick, format) {
     return withStats
@@ -2360,6 +2381,27 @@ function PlayerStatsCharts({ players, events }) {
       .sort((a, b) => b.raw - a.raw);
   }
 
+  // Media por partido jugado (en vez del total), con el total real debajo
+  function rowsForAvg(pick) {
+    return withStats
+      .map(({ p, s, matchesPlayed }) => {
+        const total = pick(s) || 0;
+        // Sin lista de partidos (p.ej. gráficos de un solo partido) no hay media que calcular: se muestra el total
+        if (!matches) {
+          return { label: p.name, raw: total, display: String(total) };
+        }
+        const raw = matchesPlayed > 0 ? Math.round((total / matchesPlayed) * 10) / 10 : 0;
+        return {
+          label: p.name,
+          raw,
+          display: raw.toFixed(1),
+          sub: matchesPlayed > 0 ? `${total} en ${matchesPlayed} partido${matchesPlayed === 1 ? "" : "s"}` : null,
+        };
+      })
+      .filter((r) => r.raw > 0)
+      .sort((a, b) => b.raw - a.raw);
+  }
+
   const charts = [
     { title: "Goles", color: "var(--turf)", rows: rowsFor((s) => s.goles) },
     { title: "Asistencias", color: "var(--turf)", rows: rowsFor((s) => s.asistencias) },
@@ -2373,8 +2415,8 @@ function PlayerStatsCharts({ players, events }) {
       color: "var(--cielo)",
       rows: rowsForPct((s) => s.regatesPct, (s) => s.regatesOk, (s) => s.regatesTotales),
     },
-    { title: "Recuperaciones", color: "var(--cielo)", rows: rowsFor((s) => s.robos) },
-    { title: "Balones perdidos", color: "var(--crimson)", rows: rowsFor((s) => s.perdidas) },
+    { title: "Recuperaciones por partido", color: "var(--cielo)", rows: rowsForAvg((s) => s.robos) },
+    { title: "Balones perdidos por partido", color: "var(--crimson)", rows: rowsForAvg((s) => s.perdidas) },
     { title: "Paradas (portero)", color: "var(--violet)", rows: rowsFor((s) => s.paradas) },
     { title: "Goles encajados (portero)", color: "var(--crimson)", rows: rowsFor((s) => s.golesEncajados) },
   ].filter((c) => c.rows.length > 0);
@@ -2511,7 +2553,7 @@ function SeasonStats({ matches, squad, onBack, onGoCharts }) {
 /* ---------------------------------------------------------
    Pantalla: Gráficos de jugadores
 --------------------------------------------------------- */
-function PlayerChartsScreen({ players, events, teamEvents, onBack }) {
+function PlayerChartsScreen({ players, events, teamEvents, matches, onBack }) {
   const [tab, setTab] = useState("jugadores");
 
   return (
@@ -2541,7 +2583,7 @@ function PlayerChartsScreen({ players, events, teamEvents, onBack }) {
       </div>
 
       {tab === "jugadores" ? (
-        <PlayerStatsCharts players={players} events={events} />
+        <PlayerStatsCharts players={players} events={events} matches={matches} />
       ) : (
         <TeamStatsCharts events={events} teamEvents={teamEvents} />
       )}
@@ -3430,6 +3472,7 @@ function App() {
           players={data.squad}
           events={Object.values(data.matchesById).flatMap((m) => m.events)}
           teamEvents={Object.values(data.matchesById).flatMap((m) => m.teamEvents || [])}
+          matches={Object.values(data.matchesById)}
           onBack={() => setView("home")}
         />
       )}
