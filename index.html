@@ -2620,23 +2620,23 @@ function SetPieceBoard({ positions, squad, onSave }) {
         onClick={handlePitchClick}
         className="relative w-full mx-auto mb-3"
         style={{
-          maxWidth: 560,
-          aspectRatio: "3 / 2",
+          maxWidth: 620,
+          aspectRatio: "68 / 50",
           background: "#2E7D32",
           borderRadius: 12,
           border: "2px solid rgba(255,255,255,0.55)",
           overflow: "hidden",
         }}
       >
-        {/* Portería (borde izquierdo) */}
+        {/* Portería */}
         <div
           style={{
             position: "absolute",
-            left: 0,
-            top: "50%",
-            width: "2.5%",
-            height: "22%",
-            marginTop: "-11%",
+            left: "50%",
+            top: 0,
+            width: "22%",
+            height: "2.5%",
+            marginLeft: "-11%",
             background: "rgba(255,255,255,0.55)",
           }}
         />
@@ -2644,51 +2644,65 @@ function SetPieceBoard({ positions, squad, onSave }) {
         <div
           style={{
             position: "absolute",
-            left: 0,
-            top: "50%",
-            width: "16%",
-            height: "30%",
-            marginTop: "-15%",
+            left: "50%",
+            top: 0,
+            width: "30%",
+            height: "20%",
+            marginLeft: "-15%",
             border: "2px solid rgba(255,255,255,0.55)",
-            borderLeft: "none",
+            borderTop: "none",
           }}
         />
         {/* Área grande */}
         <div
           style={{
             position: "absolute",
-            left: 0,
-            top: "50%",
-            width: "38%",
-            height: "62%",
-            marginTop: "-31%",
+            left: "50%",
+            top: 0,
+            width: "62%",
+            height: "42%",
+            marginLeft: "-31%",
             border: "2px solid rgba(255,255,255,0.55)",
-            borderLeft: "none",
+            borderTop: "none",
           }}
         />
         {/* Semicírculo del área */}
         <div
           style={{
             position: "absolute",
-            left: "38%",
-            top: "50%",
-            height: "28%",
-            aspectRatio: "0.5 / 1",
-            marginTop: "-14%",
+            left: "50%",
+            top: "42%",
+            width: "28%",
+            aspectRatio: "1 / 0.5",
+            marginLeft: "-14%",
             border: "2px solid rgba(255,255,255,0.55)",
-            borderLeft: "none",
-            borderRadius: "0 999px 999px 0",
+            borderTop: "none",
+            borderRadius: "0 0 999px 999px",
           }}
         />
         {/* Línea de medio campo */}
         <div
           style={{
             position: "absolute",
-            top: 0,
-            bottom: 0,
+            left: 0,
             right: 0,
-            width: 2,
+            bottom: 0,
+            height: 2,
             background: "rgba(255,255,255,0.55)",
+          }}
+        />
+        {/* Círculo central (mitad visible desde la línea de medio campo) */}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            bottom: 0,
+            width: "30%",
+            aspectRatio: "1 / 0.5",
+            marginLeft: "-15%",
+            border: "2px solid rgba(255,255,255,0.55)",
+            borderBottom: "none",
+            borderRadius: "999px 999px 0 0",
           }}
         />
         {/* Banderines de córner */}
@@ -2707,13 +2721,13 @@ function SetPieceBoard({ positions, squad, onSave }) {
         <div
           style={{
             position: "absolute",
-            left: 0,
-            bottom: 0,
+            right: 0,
+            top: 0,
             width: 14,
             height: 14,
-            borderTop: "2px solid rgba(255,255,255,0.55)",
-            borderRight: "2px solid rgba(255,255,255,0.55)",
-            borderRadius: "0 14px 0 0",
+            borderBottom: "2px solid rgba(255,255,255,0.55)",
+            borderLeft: "2px solid rgba(255,255,255,0.55)",
+            borderRadius: "0 0 0 14px",
           }}
         />
 
