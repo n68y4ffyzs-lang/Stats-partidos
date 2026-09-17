@@ -2793,6 +2793,90 @@ const SET_PIECE_TYPES = [
   { id: "falta", label: "Faltas" },
 ];
 
+/* ---------------------------------------------------------
+   Jugadas de una categoría de balón parado (p.ej. córners a favor):
+   varias jugadas con nombre propio, cada una con su propio medio campo
+--------------------------------------------------------- */
+function SetPieceCategoryEditor({ plays, squad, onSave }) {
+  const [activePlayId, setActivePlayId] = useState(plays[0] ? plays[0].id : null);
+
+  const activePlay = plays.find((pl) => pl.id === activePlayId) || null;
+
+  function addPlay() {
+    const newPlay = { id: genId(), name: `Jugada ${plays.length + 1}`, positions: {} };
+    onSave([...plays, newPlay]);
+    setActivePlayId(newPlay.id);
+  }
+
+  function renamePlay(id, name) {
+    onSave(plays.map((pl) => (pl.id === id ? { ...pl, name } : pl)));
+  }
+
+  function removePlay(id) {
+    if (!window.confirm("¿Eliminar esta jugada?")) return;
+    const updated = plays.filter((pl) => pl.id !== id);
+    onSave(updated);
+    setActivePlayId(updated[0] ? updated[0].id : null);
+  }
+
+  function savePositions(id, positions) {
+    onSave(plays.map((pl) => (pl.id === id ? { ...pl, positions } : pl)));
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {plays.map((pl) => (
+          <button
+            key={pl.id}
+            onClick={() => setActivePlayId(pl.id)}
+            className="mp-btn px-3 py-2 text-sm"
+            style={activePlayId === pl.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            {pl.name}
+          </button>
+        ))}
+        <button onClick={addPlay} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          + Nueva jugada
+        </button>
+      </div>
+
+      {!activePlay ? (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          Añade una jugada para empezar a colocar a los jugadores.
+        </div>
+      ) : (
+        <React.Fragment>
+          <div className="mp-card p-3 mb-3 flex items-end gap-2">
+            <div className="flex-1">
+              <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Nombre de la jugada</label>
+              <input
+                value={activePlay.name}
+                onChange={(e) => renamePlay(activePlay.id, e.target.value)}
+                className="mp-input px-3 py-2 w-full mt-1"
+              />
+            </div>
+            <button
+              onClick={() => removePlay(activePlay.id)}
+              className="mp-btn mp-btn-outline px-3 py-2 text-xs shrink-0"
+              style={{ color: "var(--crimson)" }}
+            >
+              Eliminar
+            </button>
+          </div>
+
+          <SetPieceBoard
+            key={activePlay.id}
+            positions={activePlay.positions || {}}
+            squad={squad}
+            onSave={(positions) => savePositions(activePlay.id, positions)}
+          />
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
 function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositions, onBack }) {
   const [mainTab, setMainTab] = useState("estadisticas");
   const [spSide, setSpSide] = useState("favor");
@@ -2917,11 +3001,11 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
             ))}
           </div>
 
-          <SetPieceBoard
+          <SetPieceCategoryEditor
             key={spCategory}
-            positions={setPiecePositions[spCategory] || {}}
+            plays={setPiecePositions[spCategory] || []}
             squad={squad}
-            onSave={(positions) => onSaveSetPiecePositions(spCategory, positions)}
+            onSave={(plays) => onSaveSetPiecePositions(spCategory, plays)}
           />
         </React.Fragment>
       )}
