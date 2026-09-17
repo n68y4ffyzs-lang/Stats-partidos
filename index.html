@@ -3003,7 +3003,7 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
 
           <SetPieceCategoryEditor
             key={spCategory}
-            plays={setPiecePositions[spCategory] || []}
+            plays={Array.isArray(setPiecePositions[spCategory]) ? setPiecePositions[spCategory] : []}
             squad={squad}
             onSave={(plays) => onSaveSetPiecePositions(spCategory, plays)}
           />
