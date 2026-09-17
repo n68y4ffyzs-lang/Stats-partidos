@@ -211,6 +211,18 @@ function matchBadge(m) {
   return { label: "En juego", bg: "rgba(227,167,45,0.18)", color: "var(--amber)" };
 }
 
+// Local (verde) / visitante (rojo); gris si no se sabe (partidos antiguos sin ese dato)
+function venueColor(m) {
+  if (m.isHome === true) return "var(--turf)";
+  if (m.isHome === false) return "var(--crimson)";
+  return "var(--chalk-dim)";
+}
+function venueLabel(m) {
+  if (m.isHome === true) return "Local";
+  if (m.isHome === false) return "Visitante";
+  return null;
+}
+
 /* ---------------------------------------------------------
    Almacenamiento local + sincronización con Supabase
 --------------------------------------------------------- */
@@ -734,12 +746,6 @@ function MatchCalendar({ matches, onOpenMatch }) {
     });
   }
 
-  function dotColor(dayMatches) {
-    if (dayMatches.some((m) => !m.finished && !m.scheduled)) return "var(--amber)";
-    if (dayMatches.some((m) => m.scheduled)) return "var(--cielo)";
-    return "var(--turf)";
-  }
-
   const selectedMatches = selectedDate ? matchesByDate[selectedDate] || [] : [];
 
   return (
@@ -770,21 +776,28 @@ function MatchCalendar({ matches, onOpenMatch }) {
           const hasMatch = dayMatches.length > 0;
           const isToday = iso === todayIso;
           const selected = iso === selectedDate;
+          const vColor = hasMatch ? venueColor(dayMatches[0]) : null;
           return (
             <button
               key={i}
               onClick={() => hasMatch && setSelectedDate(selected ? null : iso)}
-              className="mp-card flex flex-col items-center justify-center gap-0.5 py-1.5 text-xs"
+              className="mp-card flex flex-col items-center justify-center gap-0.5 py-1 px-0.5 text-xs"
               style={{
-                borderColor: selected ? "var(--turf)" : isToday ? "var(--cielo)" : undefined,
+                minHeight: 42,
+                borderColor: selected ? "var(--chalk)" : hasMatch ? vColor : isToday ? "var(--cielo)" : undefined,
+                borderWidth: hasMatch ? 2 : 1,
                 opacity: hasMatch ? 1 : 0.4,
               }}
             >
               <span>{d}</span>
-              <span
-                className="mp-dot"
-                style={{ width: 5, height: 5, background: hasMatch ? dotColor(dayMatches) : "transparent" }}
-              />
+              {hasMatch && (
+                <span
+                  className="truncate w-full text-center leading-tight"
+                  style={{ fontSize: 8, color: vColor }}
+                >
+                  {dayMatches[0].opponent}
+                </span>
+              )}
             </button>
           );
         })}
@@ -794,6 +807,7 @@ function MatchCalendar({ matches, onOpenMatch }) {
         <div className="flex flex-col gap-2 mp-fade-in">
           {selectedMatches.map((m) => {
             const badge = matchBadge(m);
+            const vLabel = venueLabel(m);
             return (
               <button
                 key={m.id}
@@ -802,7 +816,10 @@ function MatchCalendar({ matches, onOpenMatch }) {
               >
                 <div className="min-w-0">
                   <div className="font-semibold truncate">vs {m.opponent}</div>
-                  <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
+                  <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                    {m.date}
+                    {vLabel && <span style={{ color: venueColor(m) }}> · {vLabel}</span>}
+                  </div>
                 </div>
                 <span
                   className="text-xs px-2 py-1 rounded-full whitespace-nowrap shrink-0"
@@ -819,7 +836,21 @@ function MatchCalendar({ matches, onOpenMatch }) {
   );
 }
 
-function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGoSeason, onGoSetPieces, onGoCharts, squadCount, syncStatus, onGoSync }) {
+function Home({
+  matches,
+  onNewMatch,
+  onOpenMatch,
+  onDeleteMatch,
+  onGoSquad,
+  onGoSeason,
+  onGoSetPieces,
+  onGoCharts,
+  squadCount,
+  syncStatus,
+  onGoSync,
+  onImportCalendar,
+  calendarImport,
+}) {
   const [search, setSearch] = useState("");
   const [matchesTab, setMatchesTab] = useState("lista");
 
@@ -868,9 +899,27 @@ function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGo
 
       <LeagueStandings />
 
-      <h2 className="text-sm uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
-        Partidos
-      </h2>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-sm uppercase tracking-wide" style={{ color: "var(--chalk-dim)" }}>
+          Partidos
+        </h2>
+        <button
+          onClick={onImportCalendar}
+          disabled={calendarImport.loading}
+          className="mp-btn mp-btn-outline px-2 py-1 text-xs disabled:opacity-40"
+        >
+          {calendarImport.loading ? "Importando…" : "Importar calendario FFCV"}
+        </button>
+      </div>
+
+      {calendarImport.message && (
+        <div
+          className="text-xs mb-2"
+          style={{ color: calendarImport.message.startsWith("Error") ? "var(--crimson)" : "var(--chalk-dim)" }}
+        >
+          {calendarImport.message}
+        </div>
+      )}
 
       <input
         value={search}
@@ -915,6 +964,7 @@ function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGo
             .sort((a, b) => (a.date < b.date ? 1 : -1))
             .map((m) => {
               const badge = matchBadge(m);
+              const vLabel = venueLabel(m);
               return (
                 <div key={m.id} className="mp-card p-3 flex items-center gap-2">
                   <button
@@ -923,7 +973,10 @@ function Home({ matches, onNewMatch, onOpenMatch, onDeleteMatch, onGoSquad, onGo
                   >
                     <div className="min-w-0">
                       <div className="font-semibold truncate">vs {m.opponent}</div>
-                      <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{m.date}</div>
+                      <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                        {m.date}
+                        {vLabel && <span style={{ color: venueColor(m) }}> · {vLabel}</span>}
+                      </div>
                     </div>
                     <span
                       className="text-xs px-2 py-1 rounded-full whitespace-nowrap"
@@ -1045,6 +1098,7 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
   const [date, setDate] = useState(todayISO());
   const [halfLength, setHalfLength] = useState(45);
   const [titulares, setTitulares] = useState([]);
+  const [isHome, setIsHome] = useState(true);
 
   const isFuture = date > todayISO();
 
@@ -1056,7 +1110,7 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
 
   function submit() {
     if (!opponent.trim() || (!isFuture && titulares.length === 0)) return;
-    onCreate({ opponent: opponent.trim(), date, halfLength: Number(halfLength) || 45, titulares });
+    onCreate({ opponent: opponent.trim(), date, halfLength: Number(halfLength) || 45, titulares, isHome });
   }
 
   if (squad.length === 0) {
@@ -1114,6 +1168,26 @@ function MatchSetup({ squad, onCreate, onBack, onGoSquad }) {
             pattern="[0-9]*"
             className="mp-input px-3 py-2 w-full mt-1"
           />
+        </div>
+      </div>
+
+      <div className="mp-card p-3 mb-3">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>¿Dónde se juega?</label>
+        <div className="flex gap-2 mt-1">
+          <button
+            onClick={() => setIsHome(true)}
+            className="mp-btn px-3 py-2 text-sm flex-1"
+            style={isHome ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            Local
+          </button>
+          <button
+            onClick={() => setIsHome(false)}
+            className="mp-btn px-3 py-2 text-sm flex-1"
+            style={!isHome ? { background: "var(--crimson)", color: "#fff", border: "none" } : {}}
+          >
+            Visitante
+          </button>
         </div>
       </div>
 
@@ -3574,6 +3648,7 @@ function App() {
   const [supabaseConfig, setSupabaseConfig] = useState(getStoredSupabaseConfig);
   const [syncStatus, setSyncStatus] = useState("unconfigured");
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [calendarImport, setCalendarImport] = useState({ loading: false, message: null });
 
   const configured = isValidSupabaseConfig(supabaseConfig.url, supabaseConfig.key);
 
@@ -3768,7 +3843,7 @@ function App() {
     setView("home");
   }
 
-  function createMatch({ opponent, date, halfLength, titulares }) {
+  function createMatch({ opponent, date, halfLength, titulares, isHome }) {
     const squad = dataRef.current.squad;
     const scheduled = date > todayISO();
     const bench = squad.filter((p) => !titulares.includes(p.id)).map((p) => p.id);
@@ -3780,6 +3855,7 @@ function App() {
       half: 1,
       finished: false,
       scheduled,
+      isHome,
       clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
       onPitch: titulares,
       bench,
@@ -3792,7 +3868,7 @@ function App() {
     };
     const updatedList = [
       ...dataRef.current.matchesList,
-      { id: newMatch.id, opponent, date, finished: false, scheduled },
+      { id: newMatch.id, opponent, date, finished: false, scheduled, isHome },
     ];
     commit({
       ...dataRef.current,
@@ -3836,6 +3912,67 @@ function App() {
     if (!m) return;
     setMatch(m);
     setView(m.scheduled ? "scheduled" : m.finished ? "summary" : "live");
+  }
+
+  function importFfcvCalendar() {
+    setCalendarImport({ loading: true, message: null });
+    fetch("/api/calendario")
+      .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok || body.error) throw new Error(body.error || "No se pudo obtener el calendario");
+        const fixtures = body.fixtures || [];
+        const existing = dataRef.current.matchesList;
+        const alreadyImported = (f) =>
+          existing.some((m) => m.date === f.date && m.opponent.trim().toLowerCase() === f.opponent.trim().toLowerCase());
+        const squad = dataRef.current.squad;
+        const newFixtures = fixtures.filter((f) => !alreadyImported(f));
+
+        if (newFixtures.length === 0) {
+          setCalendarImport({ loading: false, message: "El calendario ya estaba importado, no hay partidos nuevos." });
+          return;
+        }
+
+        const newMatches = newFixtures.map((f) => ({
+          id: genId(),
+          opponent: f.opponent,
+          date: f.date,
+          halfLength: 40,
+          half: 1,
+          finished: false,
+          scheduled: true,
+          isHome: f.isHome,
+          clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
+          onPitch: [],
+          bench: squad.map((p) => p.id),
+          events: [],
+          subs: [],
+          concededSetPieces: [],
+          teamEvents: [],
+          opponentChances: [],
+          positions: {},
+        }));
+
+        const updatedList = [
+          ...existing,
+          ...newMatches.map((m) => ({
+            id: m.id,
+            opponent: m.opponent,
+            date: m.date,
+            finished: false,
+            scheduled: true,
+            isHome: m.isHome,
+          })),
+        ];
+        const updatedById = { ...dataRef.current.matchesById };
+        newMatches.forEach((m) => { updatedById[m.id] = m; });
+
+        commit({ ...dataRef.current, matchesList: updatedList, matchesById: updatedById });
+        setCalendarImport({
+          loading: false,
+          message: `Importados ${newMatches.length} partido${newMatches.length === 1 ? "" : "s"} del calendario de la FFCV.`,
+        });
+      })
+      .catch((e) => setCalendarImport({ loading: false, message: `Error: ${e.message}` }));
   }
 
   function deleteMatch(id, opponent) {
@@ -3915,6 +4052,8 @@ function App() {
           onGoCharts={() => setView("charts")}
           syncStatus={syncStatus}
           onGoSync={() => setView("sync")}
+          onImportCalendar={importFfcvCalendar}
+          calendarImport={calendarImport}
         />
       )}
       {view === "squad" && (
