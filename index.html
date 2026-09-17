@@ -2611,8 +2611,8 @@ function SetPieceBoard({ positions, squad, onSave }) {
     <div>
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
         {selectedId
-          ? `Toca el campo para colocar a ${playerById(selectedId).name}`
-          : "Toca un jugador y luego el campo para colocarlo"}
+          ? `Toca el campo para colocar a ${selectedId === "ball" ? "el balón" : playerById(selectedId).name}`
+          : "Toca un jugador o el balón y luego el campo para colocarlo"}
       </div>
 
       <div
@@ -2754,9 +2754,28 @@ function SetPieceBoard({ positions, squad, onSave }) {
             </button>
           );
         })}
+
+        {positions.ball && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleSelect("ball");
+            }}
+            className={`mp-shirt w-8 h-8 text-base ${selectedId === "ball" ? "selected" : ""}`}
+            style={{
+              position: "absolute",
+              left: `${positions.ball.x}%`,
+              top: `${positions.ball.y}%`,
+              transform: "translate(-50%, -50%)",
+              background: selectedId === "ball" ? undefined : "#F4F1E8",
+            }}
+          >
+            ⚽
+          </button>
+        )}
       </div>
 
-      {selectedId && placedIds.includes(selectedId) && (
+      {selectedId && (placedIds.includes(selectedId) || (selectedId === "ball" && positions.ball)) && (
         <button
           onClick={() => {
             clearPosition(selectedId);
@@ -2765,9 +2784,33 @@ function SetPieceBoard({ positions, squad, onSave }) {
           className="mp-btn mp-btn-outline w-full py-2 text-xs mb-3"
           style={{ color: "var(--crimson)" }}
         >
-          Quitar del campo a {playerById(selectedId).name}
+          Quitar {selectedId === "ball" ? "el balón" : playerById(selectedId).name} del campo
         </button>
       )}
+
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        Balón — indica desde dónde se saca
+      </div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {positions.ball ? (
+          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            El balón ya está colocado en el campo.
+          </span>
+        ) : (
+          <div className="flex flex-col items-center gap-1" style={{ width: 56 }}>
+            <button
+              onClick={() => handleSelect("ball")}
+              className={`mp-shirt w-10 h-10 text-lg ${selectedId === "ball" ? "selected" : ""}`}
+              style={{ background: selectedId === "ball" ? undefined : "#F4F1E8" }}
+            >
+              ⚽
+            </button>
+            <span className="text-[10px] text-center leading-tight" style={{ color: "var(--chalk-dim)" }}>
+              Balón
+            </span>
+          </div>
+        )}
+      </div>
 
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Jugadores</div>
       <div className="flex flex-wrap gap-2">
