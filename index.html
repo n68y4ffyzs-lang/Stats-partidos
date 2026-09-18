@@ -323,6 +323,19 @@ function CrestPicker({ src, size = 40, onPick, label }) {
   );
 }
 
+// Los dos escudos de un partido en fila, en el orden local - visitante (nosotros primero si jugamos en casa)
+function MatchCrests({ match, crests, size = 28 }) {
+  const own = crests && crests.own;
+  const rival = rivalCrest(crests, match.opponent);
+  if (!own && !rival) return null;
+  const pair = match.isHome === false ? [rival, own] : [own, rival];
+  return (
+    <span className="inline-flex items-center gap-1 shrink-0">
+      {pair.map((src, i) => (src ? <CrestImage key={i} src={src} size={size} /> : <span key={i} style={{ width: size }} />))}
+    </span>
+  );
+}
+
 // Resultado con escudos: local a la izquierda y visitante a la derecha (nosotros, si jugamos en casa)
 function ScoreWithCrests({ match, favor, contra, crests, onPickOwn, onPickRival, size = 44 }) {
   const away = match.isHome === false;
@@ -933,7 +946,7 @@ function MatchCalendar({ matches, crests, onOpenMatch }) {
                 className="mp-card p-3 text-left flex items-center justify-between gap-2"
               >
                 <div className="min-w-0 flex items-center gap-2">
-                  <CrestImage src={rivalCrest(crests, m.opponent)} size={32} />
+                  <MatchCrests match={m} crests={crests} size={28} />
                   <div className="min-w-0">
                     <div className="font-semibold truncate">vs {m.opponent}</div>
                     <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
@@ -960,6 +973,7 @@ function MatchCalendar({ matches, crests, onOpenMatch }) {
 function Home({
   matches,
   crests,
+  onSaveCrest,
   onNewMatch,
   onOpenMatch,
   onDeleteMatch,
@@ -983,7 +997,13 @@ function Home({
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-3 pt-2">
-        <div>
+        <CrestPicker
+          src={crests && crests.own}
+          size={44}
+          onPick={(url) => onSaveCrest("own", null, url)}
+          label="Elegir el escudo de mi equipo"
+        />
+        <div className="flex-1 min-w-0 mx-3">
           <h1 className="display text-3xl font-semibold leading-none">Cuaderno de partido</h1>
           <p className="text-sm mt-1" style={{ color: "var(--chalk-dim)" }}>
             {squadCount} jugador{squadCount === 1 ? "" : "es"} en la plantilla
@@ -1098,7 +1118,7 @@ function Home({
                     className="flex-1 min-w-0 text-left flex items-center justify-between gap-2"
                   >
                     <div className="min-w-0 flex items-center gap-2">
-                      <CrestImage src={rivalCrest(crests, m.opponent)} size={32} />
+                      <MatchCrests match={m} crests={crests} size={28} />
                       <div className="min-w-0">
                         <div className="font-semibold truncate">vs {m.opponent}</div>
                         <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
@@ -1392,12 +1412,25 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
         <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
           Volver
         </button>
-        <CrestPicker
-          src={rivalCrest(crests, match.opponent)}
-          size={40}
-          onPick={(url) => onSaveCrest("rival", match.opponent, url)}
-          label={`Elegir el escudo de ${match.opponent}`}
-        />
+        {(() => {
+          const ownPicker = (
+            <CrestPicker src={crests && crests.own} size={40} onPick={(url) => onSaveCrest("own", null, url)} label="Elegir el escudo de mi equipo" />
+          );
+          const rivalPicker = (
+            <CrestPicker
+              src={rivalCrest(crests, match.opponent)}
+              size={40}
+              onPick={(url) => onSaveCrest("rival", match.opponent, url)}
+              label={`Elegir el escudo de ${match.opponent}`}
+            />
+          );
+          return (
+            <div className="flex items-center gap-2">
+              {match.isHome === false ? rivalPicker : ownPicker}
+              {match.isHome === false ? ownPicker : rivalPicker}
+            </div>
+          );
+        })()}
         <div>
           <h1 className="display text-2xl font-semibold">vs {match.opponent}</h1>
           <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{match.date}</div>
@@ -4852,6 +4885,7 @@ function App() {
         <Home
           matches={data.matchesList}
           crests={data.crests}
+          onSaveCrest={saveCrest}
           squadCount={data.squad.length}
           onNewMatch={() => setView("setup")}
           onOpenMatch={openMatch}
