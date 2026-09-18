@@ -845,6 +845,7 @@ function Home({
   onGoSeason,
   onGoSetPieces,
   onGoCharts,
+  onGoPitch,
   squadCount,
   syncStatus,
   onGoSync,
@@ -875,26 +876,29 @@ function Home({
         <SyncBadge status={syncStatus} onClick={onGoSync} />
       </div>
 
-      <button
-        onClick={onNewMatch}
-        className="mp-btn mp-btn-primary w-full py-4 text-lg font-semibold mb-3 display"
-      >
-        Nuevo partido
-      </button>
+      <div style={{ width: "100vw", position: "relative", left: "50%", marginLeft: "-50vw", padding: "0 16px" }}>
+        <button
+          onClick={onNewMatch}
+          className="mp-btn mp-btn-primary w-full py-4 text-lg font-semibold mb-3 display"
+        >
+          Nuevo partido
+        </button>
 
-      <div className="grid grid-cols-3 gap-2 mb-6">
-        {[
-          { label: "Temporada", icon: "📊", color: "var(--cielo)", onClick: onGoSeason },
-          { label: "Balón parado", icon: "🎯", color: "var(--amber)", onClick: onGoSetPieces },
-          { label: "Gráficos", icon: "📈", color: "var(--turf)", onClick: onGoCharts },
-        ].map((t) => (
-          <button key={t.label} onClick={t.onClick} className="mp-card mp-btn mp-tile py-3 px-1">
-            <span className="mp-tile-icon" style={{ background: "rgba(244,241,232,0.08)", border: `1px solid ${t.color}` }}>
-              {t.icon}
-            </span>
-            <span className="text-xs font-semibold">{t.label}</span>
-          </button>
-        ))}
+        <div className="grid grid-cols-4 gap-2 mb-6">
+          {[
+            { label: "Temporada", icon: "📊", color: "var(--cielo)", onClick: onGoSeason },
+            { label: "Balón parado", icon: "🎯", color: "var(--amber)", onClick: onGoSetPieces },
+            { label: "Campo", icon: "🏟️", color: "var(--violet)", onClick: onGoPitch },
+            { label: "Gráficos", icon: "📈", color: "var(--turf)", onClick: onGoCharts },
+          ].map((t) => (
+            <button key={t.label} onClick={t.onClick} className="mp-card mp-btn mp-tile py-3 px-1">
+              <span className="mp-tile-icon" style={{ background: "rgba(244,241,232,0.08)", border: `1px solid ${t.color}` }}>
+                {t.icon}
+              </span>
+              <span className="text-xs font-semibold">{t.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <LeagueStandings />
@@ -3638,6 +3642,332 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
 }
 
 /* ---------------------------------------------------------
+   Pantalla: Campo (pizarra táctica a pantalla completa)
+   Campo entero con la plantilla y 11 rivales que se pueden
+   arrastrar, un balón y un lápiz para dibujar en varios colores.
+--------------------------------------------------------- */
+const PITCH_BOARD_KEY = "rp_pitch_board";
+const PITCH_COLORS = [
+  { id: "white", value: "#FFFFFF" },
+  { id: "amber", value: "#FFD23F" },
+  { id: "crimson", value: "#FF4D4D" },
+  { id: "cielo", value: "#4DB2FF" },
+  { id: "violet", value: "#C08BFF" },
+  { id: "black", value: "#111111" },
+];
+const PITCH_LINE = "rgba(255,255,255,0.7)";
+const RIVAL_IDS = Array.from({ length: 11 }, (_, i) => `rival_${i + 1}`);
+
+function loadPitchBoard() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PITCH_BOARD_KEY) || "null");
+    return { positions: parsed?.positions || {}, strokes: parsed?.strokes || [] };
+  } catch (e) {
+    return { positions: {}, strokes: [] };
+  }
+}
+
+// Posiciones iniciales: plantilla en la mitad de abajo a la izquierda, rivales a la derecha
+function defaultPitchPositions(squad) {
+  const positions = { ball: { x: 34, y: 52.5 } };
+  const place = (ids, xStart) => {
+    const cols = Math.max(2, Math.ceil(ids.length / 5));
+    const colW = 34 / cols;
+    ids.forEach((id, i) => {
+      positions[id] = {
+        x: xStart + (i % cols + 0.5) * colW,
+        y: 60 + Math.floor(i / cols) * 9.4,
+      };
+    });
+  };
+  place(squad.map((p) => p.id), 0);
+  place(RIVAL_IDS, 34);
+  return positions;
+}
+
+function PitchLines() {
+  const stroke = { fill: "none", stroke: PITCH_LINE, strokeWidth: 0.35 };
+  return (
+    <g>
+      <rect x="0" y="0" width="68" height="105" fill="#2E7D32" />
+      {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+        <rect key={i} x="0" y={i * 15} width="68" height="7.5" fill="rgba(0,0,0,0.06)" />
+      ))}
+      <rect x="0" y="0" width="68" height="105" {...stroke} />
+      <line x1="0" y1="52.5" x2="68" y2="52.5" {...stroke} />
+      <circle cx="34" cy="52.5" r="9.15" {...stroke} />
+      <circle cx="34" cy="52.5" r="0.5" fill={PITCH_LINE} />
+      {/* Área arriba */}
+      <rect x="13.84" y="0" width="40.32" height="16.5" {...stroke} />
+      <rect x="24.84" y="0" width="18.32" height="5.5" {...stroke} />
+      <circle cx="34" cy="11" r="0.5" fill={PITCH_LINE} />
+      <path d="M 26.69 16.5 A 9.15 9.15 0 0 0 41.31 16.5" {...stroke} />
+      <rect x="30.34" y="-1.5" width="7.32" height="1.5" {...stroke} />
+      {/* Área abajo */}
+      <rect x="13.84" y="88.5" width="40.32" height="16.5" {...stroke} />
+      <rect x="24.84" y="99.5" width="18.32" height="5.5" {...stroke} />
+      <circle cx="34" cy="94" r="0.5" fill={PITCH_LINE} />
+      <path d="M 26.69 88.5 A 9.15 9.15 0 0 1 41.31 88.5" {...stroke} />
+      <rect x="30.34" y="105" width="7.32" height="1.5" {...stroke} />
+      {/* Córners */}
+      <path d="M 0 1 A 1 1 0 0 0 1 0" {...stroke} />
+      <path d="M 67 0 A 1 1 0 0 0 68 1" {...stroke} />
+      <path d="M 0 104 A 1 1 0 0 1 1 105" {...stroke} />
+      <path d="M 68 104 A 1 1 0 0 0 67 105" {...stroke} />
+    </g>
+  );
+}
+
+function PitchScreen({ squad, onBack }) {
+  const initial = useRef(null);
+  if (!initial.current) initial.current = loadPitchBoard();
+  const [positions, setPositions] = useState(() => ({
+    ...defaultPitchPositions(squad),
+    ...initial.current.positions,
+  }));
+  const [strokes, setStrokes] = useState(initial.current.strokes);
+  const [mode, setMode] = useState("mover");
+  const [color, setColor] = useState(PITCH_COLORS[1].value);
+  const [thick, setThick] = useState(false);
+  const svgRef = useRef(null);
+  const dragRef = useRef(null);
+  const drawingRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PITCH_BOARD_KEY, JSON.stringify({ positions, strokes }));
+    } catch (e) {}
+  }, [positions, strokes]);
+
+  // Jugadores nuevos de la plantilla que aún no tienen posición
+  const tokenIds = [...squad.map((p) => p.id), ...RIVAL_IDS];
+  const defaults = defaultPitchPositions(squad);
+  const posOf = (id) => positions[id] || defaults[id];
+
+  function toSvgPoint(e) {
+    const svg = svgRef.current;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    return { x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 };
+  }
+
+  function handleTokenDown(e, id) {
+    if (mode !== "mover") return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = id;
+  }
+
+  function handleMove(e) {
+    if (mode === "mover" && dragRef.current) {
+      const id = dragRef.current;
+      const p = toSvgPoint(e);
+      setPositions((prev) => ({
+        ...prev,
+        [id]: { x: Math.min(70, Math.max(-2, p.x)), y: Math.min(107, Math.max(-2, p.y)) },
+      }));
+    } else if (mode === "dibujar" && drawingRef.current) {
+      const p = toSvgPoint(e);
+      setStrokes((prev) => {
+        const last = prev[prev.length - 1];
+        return [...prev.slice(0, -1), { ...last, pts: [...last.pts, [p.x, p.y]] }];
+      });
+    }
+  }
+
+  function handleDown(e) {
+    if (mode !== "dibujar") return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = toSvgPoint(e);
+    drawingRef.current = true;
+    setStrokes((prev) => [...prev, { color, width: thick ? 1.1 : 0.5, pts: [[p.x, p.y]] }]);
+  }
+
+  function handleUp() {
+    dragRef.current = null;
+    drawingRef.current = false;
+  }
+
+  function resetTokens() {
+    if (!window.confirm("¿Volver a colocar a todos los jugadores y el balón en su sitio inicial?")) return;
+    setPositions(defaultPitchPositions(squad));
+  }
+
+  const strokePath = (pts) =>
+    pts.length === 1
+      ? `M ${pts[0][0]} ${pts[0][1]} l 0.01 0`
+      : "M " + pts.map((p) => `${p[0]} ${p[1]}`).join(" L ");
+
+  const modeBtn = (id, label) => (
+    <button
+      onClick={() => setMode(id)}
+      className="mp-btn px-3 py-2 text-sm"
+      style={mode === id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 40,
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--pitch)",
+      }}
+    >
+      <div
+        className="flex items-center gap-2 px-3 py-2"
+        style={{ flexWrap: "wrap", borderBottom: "1px solid rgba(244,241,232,0.1)" }}
+      >
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        {modeBtn("mover", "✋ Mover")}
+        {modeBtn("dibujar", "✏️ Lápiz")}
+        <div className="flex items-center gap-2" style={{ opacity: mode === "dibujar" ? 1 : 0.5 }}>
+          {PITCH_COLORS.map((c) => (
+            <button
+              key={c.id}
+              aria-label={`Color ${c.id}`}
+              onClick={() => {
+                setColor(c.value);
+                setMode("dibujar");
+              }}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 999,
+                background: c.value,
+                border: color === c.value ? "3px solid var(--cielo)" : "2px solid rgba(244,241,232,0.4)",
+              }}
+            />
+          ))}
+          <button onClick={() => setThick((t) => !t)} className="mp-btn px-2 py-1 text-xs">
+            {thick ? "Trazo grueso" : "Trazo fino"}
+          </button>
+        </div>
+        <button
+          onClick={() => setStrokes((s) => s.slice(0, -1))}
+          disabled={strokes.length === 0}
+          className="mp-btn px-3 py-2 text-sm disabled:opacity-40"
+        >
+          Deshacer
+        </button>
+        <button
+          onClick={() => setStrokes([])}
+          disabled={strokes.length === 0}
+          className="mp-btn px-3 py-2 text-sm disabled:opacity-40"
+          style={{ color: "var(--crimson)" }}
+        >
+          Borrar dibujo
+        </button>
+        <button onClick={resetTokens} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Recolocar
+        </button>
+      </div>
+
+      <svg
+        ref={svgRef}
+        viewBox="-3 -3 74 111"
+        preserveAspectRatio="xMidYMid meet"
+        onPointerDown={handleDown}
+        onPointerMove={handleMove}
+        onPointerUp={handleUp}
+        onPointerCancel={handleUp}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          width: "100%",
+          touchAction: "none",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          cursor: mode === "dibujar" ? "crosshair" : "default",
+        }}
+      >
+        <PitchLines />
+
+        {tokenIds.map((id) => {
+          const pos = posOf(id);
+          if (!pos) return null;
+          const rival = id.startsWith("rival_");
+          const player = rival ? null : squad.find((p) => p.id === id);
+          const label = rival ? id.split("_")[1] : player.number;
+          return (
+            <g
+              key={id}
+              transform={`translate(${pos.x} ${pos.y})`}
+              onPointerDown={(e) => handleTokenDown(e, id)}
+              style={{ cursor: mode === "mover" ? "grab" : "crosshair", pointerEvents: mode === "mover" ? "auto" : "none" }}
+            >
+              <circle r="3.6" fill={rival ? "#D1373E" : "#F4F1E8"} stroke={rival ? "#7A1B20" : "#16241C"} strokeWidth="0.4" />
+              <text
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize="3.4"
+                fontWeight="700"
+                fontFamily="Oswald, sans-serif"
+                fill={rival ? "#FFFFFF" : "#16241C"}
+                style={{ pointerEvents: "none" }}
+              >
+                {label}
+              </text>
+              {player && (
+                <text
+                  y="5.9"
+                  textAnchor="middle"
+                  fontSize="2.2"
+                  fontWeight="600"
+                  fill="#FFFFFF"
+                  stroke="rgba(0,0,0,0.6)"
+                  strokeWidth="0.5"
+                  paintOrder="stroke"
+                  style={{ pointerEvents: "none" }}
+                >
+                  {player.name.split(" ")[0].slice(0, 9)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Balón */}
+        <g
+          transform={`translate(${posOf("ball").x} ${posOf("ball").y})`}
+          onPointerDown={(e) => handleTokenDown(e, "ball")}
+          style={{ cursor: mode === "mover" ? "grab" : "crosshair", pointerEvents: mode === "mover" ? "auto" : "none" }}
+        >
+          <circle r="2.8" fill="#FFFFFF" stroke="#111" strokeWidth="0.3" />
+          <text textAnchor="middle" dominantBaseline="central" fontSize="4.6" style={{ pointerEvents: "none" }}>
+            ⚽
+          </text>
+        </g>
+
+        {/* Dibujo (por encima de las fichas) */}
+        <g style={{ pointerEvents: "none" }}>
+          {strokes.map((s, i) => (
+            <path
+              key={i}
+              d={strokePath(s.pts)}
+              fill="none"
+              stroke={s.color}
+              strokeWidth={s.width}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ))}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    App principal
 --------------------------------------------------------- */
 function App() {
@@ -4050,6 +4380,7 @@ function App() {
           onGoSeason={() => setView("season")}
           onGoSetPieces={() => setView("setpieces")}
           onGoCharts={() => setView("charts")}
+          onGoPitch={() => setView("pitch")}
           syncStatus={syncStatus}
           onGoSync={() => setView("sync")}
           onImportCalendar={importFfcvCalendar}
@@ -4114,6 +4445,7 @@ function App() {
           onBack={goHome}
         />
       )}
+      {view === "pitch" && <PitchScreen squad={data.squad} onBack={goHome} />}
       {view === "sync" && (
         <SyncSettings
           status={syncStatus}
