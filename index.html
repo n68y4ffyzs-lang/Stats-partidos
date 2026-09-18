@@ -239,7 +239,7 @@ function emptyData() {
    Viajan dentro de los datos, así que se sincronizan con Supabase como todo lo demás.
 --------------------------------------------------------- */
 function emptyCrests() {
-  return { own: null, ownNoBg: false, rivals: {} };
+  return { own: null, ownNoBg: false, rivalsNoBg: false, rivals: {} };
 }
 
 function crestKey(name) {
@@ -446,6 +446,7 @@ function loadLocalData() {
       crests: {
         own: (parsed.crests && parsed.crests.own) || null,
         ownNoBg: !!(parsed.crests && parsed.crests.ownNoBg),
+        rivalsNoBg: !!(parsed.crests && parsed.crests.rivalsNoBg),
         rivals: (parsed.crests && parsed.crests.rivals) || {},
       },
       updatedAt: parsed.updatedAt || 0,
@@ -4764,7 +4765,7 @@ function App() {
 
   // kind: "own" (nuestro escudo) o "rival" (el del equipo `name`)
   async function saveCrest(kind, name, dataUrl) {
-    if (kind === "own") dataUrl = await removeWhiteBackground(dataUrl);
+    dataUrl = await removeWhiteBackground(dataUrl);
     const crests = dataRef.current.crests || emptyCrests();
     const next =
       kind === "own"
@@ -4773,17 +4774,26 @@ function App() {
     commit({ ...dataRef.current, crests: next });
   }
 
-  // Nuestro escudo ya guardado (de antes de este cambio) también pierde el fondo blanco, una sola vez
-  const ownCrest = data.crests && data.crests.own;
-  const ownCrestClean = data.crests && data.crests.ownNoBg;
+  // Los escudos ya guardados (de antes de este cambio) también pierden el fondo blanco, una sola vez
   useEffect(() => {
-    if (!ownCrest || ownCrestClean) return;
-    removeWhiteBackground(ownCrest).then((url) => {
+    const c = data.crests;
+    if (!c || (c.ownNoBg && c.rivalsNoBg)) return;
+    (async () => {
+      const own = c.own && !c.ownNoBg ? await removeWhiteBackground(c.own) : c.own;
+      let rivals = c.rivals;
+      if (!c.rivalsNoBg) {
+        const entries = await Promise.all(
+          Object.entries(c.rivals).map(async ([k, v]) => [k, await removeWhiteBackground(v)])
+        );
+        rivals = Object.fromEntries(entries);
+      }
       const cur = dataRef.current.crests;
-      if (cur && cur.own === ownCrest) commit({ ...dataRef.current, crests: { ...cur, own: url, ownNoBg: true } });
-    });
+      if (cur && cur.own === c.own && cur.rivals === c.rivals) {
+        commit({ ...dataRef.current, crests: { ...cur, own, ownNoBg: true, rivals, rivalsNoBg: true } });
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownCrest, ownCrestClean]);
+  }, [data.crests]);
 
   // Descarga de la FFCV los escudos de todos los equipos del grupo (el nuestro incluido).
   // Solo rellena los que aún no tienen escudo: los que hayas elegido a mano no se tocan.
@@ -4803,7 +4813,7 @@ function App() {
           try {
             const ir = await fetch("/api/escudo?p=" + encodeURIComponent(t.escudo));
             if (!ir.ok) throw new Error("sin imagen");
-            return { team: t, url: await resizeCrest(await ir.blob()) };
+            return { team: t, url: await removeWhiteBackground(await resizeCrest(await ir.blob())) };
           } catch (e) {
             return { team: t, url: null };
           }
@@ -4824,7 +4834,6 @@ function App() {
         added++;
       });
       const ownChanged = own !== current.own;
-      if (ownChanged) own = await removeWhiteBackground(own);
       if (added > 0) {
         const latest = dataRef.current.crests || emptyCrests();
         commit({
