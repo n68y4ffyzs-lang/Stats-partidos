@@ -1897,11 +1897,13 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
   function handlePitchClick(e) {
     if (!selectedId || selectedIsBench || !pitchRef.current) return;
     const rect = pitchRef.current.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    // El campo se dibuja en horizontal (portería propia a la izquierda), pero las posiciones se
+    // guardan como siempre (campo vertical, portería propia abajo): x = 100 - y_pantalla, y = x_pantalla
+    const screenX = ((e.clientX - rect.left) / rect.width) * 100;
+    const screenY = ((e.clientY - rect.top) / rect.height) * 100;
     setPosition(selectedId, {
-      x: Math.min(96, Math.max(4, x)),
-      y: Math.min(96, Math.max(4, y)),
+      x: Math.min(96, Math.max(4, screenY)),
+      y: Math.min(96, Math.max(4, 100 - screenX)),
     });
     setSelectedId(null);
   }
@@ -1921,52 +1923,55 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
         onClick={handlePitchClick}
         className="relative w-full mx-auto mb-3"
         style={{
-          maxWidth: 380,
-          aspectRatio: "68 / 100",
+          aspectRatio: "105 / 68",
           background: "#2E7D32",
           borderRadius: 12,
           border: "2px solid rgba(255,255,255,0.55)",
           overflow: "hidden",
         }}
       >
-        <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 2, background: "rgba(255,255,255,0.55)" }} />
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            width: "26%",
-            aspectRatio: "1 / 1",
-            marginLeft: "-13%",
-            marginTop: "-13%",
-            borderRadius: "50%",
-            border: "2px solid rgba(255,255,255,0.55)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: 0,
-            width: "60%",
-            height: "16%",
-            marginLeft: "-30%",
-            border: "2px solid rgba(255,255,255,0.55)",
-            borderTop: "none",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            bottom: 0,
-            width: "60%",
-            height: "16%",
-            marginLeft: "-30%",
-            border: "2px solid rgba(255,255,255,0.55)",
-            borderBottom: "none",
-          }}
-        />
+        {(() => {
+          const line = "2px solid rgba(255,255,255,0.55)";
+          return (
+            <React.Fragment>
+              {/* Línea de medio campo y círculo central */}
+              <div style={{ position: "absolute", top: 0, bottom: 0, left: "50%", width: 2, marginLeft: -1, background: "rgba(255,255,255,0.55)" }} />
+              <div
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  width: "17.4%",
+                  aspectRatio: "1 / 1",
+                  transform: "translate(-50%, -50%)",
+                  borderRadius: "50%",
+                  border: line,
+                }}
+              />
+              {/* Áreas grandes y pequeñas de cada portería */}
+              {[
+                { side: "left", w: "15.7%", h: "59.3%", border: "borderLeft" },
+                { side: "right", w: "15.7%", h: "59.3%", border: "borderRight" },
+                { side: "left", w: "5.2%", h: "26.9%", border: "borderLeft" },
+                { side: "right", w: "5.2%", h: "26.9%", border: "borderRight" },
+              ].map((a, i) => (
+                <div
+                  key={i}
+                  style={{
+                    position: "absolute",
+                    [a.side]: 0,
+                    top: "50%",
+                    width: a.w,
+                    height: a.h,
+                    transform: "translateY(-50%)",
+                    border: line,
+                    [a.border]: "none",
+                  }}
+                />
+              ))}
+            </React.Fragment>
+          );
+        })()}
 
         {placedIds.map((id) => {
           const p = playerById(id);
@@ -1982,8 +1987,8 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
               className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
               style={{
                 position: "absolute",
-                left: `${pos.x}%`,
-                top: `${pos.y}%`,
+                left: `${100 - pos.y}%`,
+                top: `${pos.x}%`,
                 transform: "translate(-50%, -50%)",
               }}
             >
