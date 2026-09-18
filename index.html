@@ -577,7 +577,20 @@ function GlobalStyles() {
         border: 1px solid rgba(244,241,232,0.2);
         color: var(--chalk);
         border-radius: 8px;
+        box-sizing: border-box;
+        min-width: 0;
+        max-width: 100%;
       }
+      /* Safari (iPad/iPhone) da a los campos de fecha un tamaño propio que se sale de su recuadro */
+      .mp-input[type="date"] {
+        -webkit-appearance: none;
+        appearance: none;
+        display: block;
+        width: 100%;
+        min-height: 2.5rem;
+        line-height: 1.25rem;
+      }
+      .mp-input[type="date"]::-webkit-date-and-time-value { text-align: left; }
       .mp-input::placeholder { color: var(--chalk-dim); }
       .mp-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
       .mp-scroll::-webkit-scrollbar-thumb { background: rgba(244,241,232,0.2); border-radius: 4px; }
@@ -1400,7 +1413,7 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad })
       </div>
 
       <div className="flex gap-3 mb-3">
-        <div className="mp-card p-3 flex-1">
+        <div className="mp-card p-3 flex-1 min-w-0">
           <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Fecha</label>
           <input
             type="date"
