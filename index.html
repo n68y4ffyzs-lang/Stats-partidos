@@ -1607,7 +1607,7 @@ function LiveMatch({ match, squad, onUpdate, onFinish, onBack }) {
         </div>
       </div>
 
-      <OpponentChanceMarker match={match} onUpdate={onUpdate} />
+      {tab === "jugadores" && <OpponentChanceMarker match={match} onUpdate={onUpdate} />}
 
       {/* Pestañas: jugadores/eventos en directo, o el resumen de cómo va el partido */}
       <div className="flex gap-2 mb-3">
