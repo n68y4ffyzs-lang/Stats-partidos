@@ -3658,9 +3658,11 @@ const PITCH_COLORS = [
 ];
 const PITCH_LINE = "rgba(255,255,255,0.7)";
 const RIVAL_IDS = Array.from({ length: 11 }, (_, i) => `rival_${i + 1}`);
-const TRAY_TOP = 73;
-const TRAY_COLS = 6;
-const TRAY_ROW_H = 10;
+const TRAY_TOP = 70.5;
+const TRAY_LABEL_W = 14;
+const TRAY_COL_W = 5.3;
+const TRAY_COLS = Math.floor((105 - TRAY_LABEL_W) / TRAY_COL_W);
+const TRAY_ROW_H = 8.6;
 const ERASER_RADIUS = 3;
 
 function loadPitchBoard() {
@@ -3672,24 +3674,30 @@ function loadPitchBoard() {
   }
 }
 
-function trayRows(squadSize) {
-  return Math.max(2, Math.ceil(squadSize / TRAY_COLS), Math.ceil(RIVAL_IDS.length / TRAY_COLS));
+// Bandeja debajo del campo: una franja para mi equipo y otra para el rival, de ancho completo
+function trayLayout(squadSize) {
+  const rowsA = Math.max(1, Math.ceil(squadSize / TRAY_COLS));
+  const rowsB = Math.max(1, Math.ceil(RIVAL_IDS.length / TRAY_COLS));
+  const hA = rowsA * TRAY_ROW_H + 0.8;
+  const hB = rowsB * TRAY_ROW_H + 0.8;
+  const topB = TRAY_TOP + hA + 1;
+  return { topA: TRAY_TOP, hA, topB, hB, bottom: topB + hB };
 }
 
-// Posiciones iniciales: plantilla en la bandeja de debajo a la izquierda, rivales a la derecha
+// Posiciones iniciales: plantilla y rivales en la bandeja de debajo del campo
 function defaultPitchPositions(squad) {
+  const layout = trayLayout(squad.length);
   const positions = { ball: { x: 52.5, y: 34 } };
-  const place = (ids, xStart) => {
-    const colW = 51 / TRAY_COLS;
+  const place = (ids, top) => {
     ids.forEach((id, i) => {
       positions[id] = {
-        x: xStart + (i % TRAY_COLS + 0.5) * colW,
-        y: TRAY_TOP + 5 + Math.floor(i / TRAY_COLS) * TRAY_ROW_H,
+        x: TRAY_LABEL_W + (i % TRAY_COLS + 0.5) * TRAY_COL_W,
+        y: top + 3.6 + Math.floor(i / TRAY_COLS) * TRAY_ROW_H,
       };
     });
   };
-  place(squad.map((p) => p.id), 0);
-  place(RIVAL_IDS, 54);
+  place(squad.map((p) => p.id), layout.topA);
+  place(RIVAL_IDS, layout.topB);
   return positions;
 }
 
@@ -3766,8 +3774,8 @@ function PitchScreen({ squad, onBack }) {
     } catch (e) {}
   }, [positions, strokes]);
 
-  const rows = trayRows(squad.length);
-  const trayBottom = TRAY_TOP + rows * TRAY_ROW_H + 2;
+  const layout = trayLayout(squad.length);
+  const trayBottom = layout.bottom;
   const tokenIds = [...squad.map((p) => p.id), ...RIVAL_IDS];
   const defaults = defaultPitchPositions(squad);
   const posOf = (id) => positions[id] || defaults[id];
@@ -3927,7 +3935,7 @@ function PitchScreen({ squad, onBack }) {
 
       <svg
         ref={svgRef}
-        viewBox={`-3 -3 111 ${trayBottom + 3}`}
+        viewBox={`-2 -1 109 ${trayBottom + 1.5}`}
         preserveAspectRatio="xMidYMid meet"
         onPointerDown={handleDown}
         onPointerMove={handleMove}
@@ -3947,12 +3955,26 @@ function PitchScreen({ squad, onBack }) {
         <PitchLines />
 
         {/* Bandeja debajo del campo */}
-        <rect x="0" y={TRAY_TOP} width="51" height={trayBottom - TRAY_TOP} rx="2" fill="rgba(244,241,232,0.08)" />
-        <rect x="54" y={TRAY_TOP} width="51" height={trayBottom - TRAY_TOP} rx="2" fill="rgba(209,55,62,0.16)" />
-        <text x="1.5" y={TRAY_TOP + 2.6} fontSize="2.2" fontWeight="600" fill="rgba(244,241,232,0.7)">
+        <rect x="0" y={layout.topA} width="105" height={layout.hA} rx="1.5" fill="rgba(244,241,232,0.1)" />
+        <rect x="0" y={layout.topB} width="105" height={layout.hB} rx="1.5" fill="rgba(209,55,62,0.2)" />
+        <text
+          x="1.2"
+          y={layout.topA + layout.hA / 2}
+          dominantBaseline="central"
+          fontSize="2.1"
+          fontWeight="700"
+          fill="rgba(244,241,232,0.85)"
+        >
           MI EQUIPO
         </text>
-        <text x="55.5" y={TRAY_TOP + 2.6} fontSize="2.2" fontWeight="600" fill="rgba(244,241,232,0.7)">
+        <text
+          x="1.2"
+          y={layout.topB + layout.hB / 2}
+          dominantBaseline="central"
+          fontSize="2.1"
+          fontWeight="700"
+          fill="rgba(244,241,232,0.85)"
+        >
           RIVAL
         </text>
 
@@ -3968,11 +3990,11 @@ function PitchScreen({ squad, onBack }) {
               onPointerDown={(e) => handleTokenDown(e, id)}
               style={tokenStyle}
             >
-              <circle r="3.6" fill={rival ? "#D1373E" : "#F4F1E8"} stroke={rival ? "#7A1B20" : "#16241C"} strokeWidth="0.4" />
+              <circle r="2.4" fill={rival ? "#D1373E" : "#F4F1E8"} stroke={rival ? "#7A1B20" : "#16241C"} strokeWidth="0.3" />
               <text
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize="3.4"
+                fontSize="2.6"
                 fontWeight="700"
                 fontFamily="Oswald, sans-serif"
                 fill={rival ? "#FFFFFF" : "#16241C"}
@@ -3982,9 +4004,9 @@ function PitchScreen({ squad, onBack }) {
               </text>
               {player && (
                 <text
-                  y="5.9"
+                  y="5.2"
                   textAnchor="middle"
-                  fontSize="2.2"
+                  fontSize="1.9"
                   fontWeight="600"
                   fill="#FFFFFF"
                   stroke="rgba(0,0,0,0.6)"
@@ -4005,8 +4027,8 @@ function PitchScreen({ squad, onBack }) {
           onPointerDown={(e) => handleTokenDown(e, "ball")}
           style={tokenStyle}
         >
-          <circle r="2.8" fill="#FFFFFF" stroke="#111" strokeWidth="0.3" />
-          <text textAnchor="middle" dominantBaseline="central" fontSize="4.6" style={{ pointerEvents: "none" }}>
+          <circle r="2.2" fill="#FFFFFF" stroke="#111" strokeWidth="0.3" />
+          <text textAnchor="middle" dominantBaseline="central" fontSize="3.6" style={{ pointerEvents: "none" }}>
             ⚽
           </text>
         </g>
