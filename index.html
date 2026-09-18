@@ -3643,10 +3643,11 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
 
 /* ---------------------------------------------------------
    Pantalla: Campo (pizarra táctica a pantalla completa)
-   Campo entero con la plantilla y 11 rivales que se pueden
-   arrastrar, un balón y un lápiz para dibujar en varios colores.
+   Campo entero en horizontal con la plantilla y 11 rivales en
+   una bandeja debajo del campo, que se arrastran al campo.
+   Incluye un balón, un lápiz con varios colores y una goma.
 --------------------------------------------------------- */
-const PITCH_BOARD_KEY = "rp_pitch_board";
+const PITCH_BOARD_KEY = "rp_pitch_board_v2";
 const PITCH_COLORS = [
   { id: "white", value: "#FFFFFF" },
   { id: "amber", value: "#FFD23F" },
@@ -3657,6 +3658,10 @@ const PITCH_COLORS = [
 ];
 const PITCH_LINE = "rgba(255,255,255,0.7)";
 const RIVAL_IDS = Array.from({ length: 11 }, (_, i) => `rival_${i + 1}`);
+const TRAY_TOP = 73;
+const TRAY_COLS = 6;
+const TRAY_ROW_H = 10;
+const ERASER_RADIUS = 3;
 
 function loadPitchBoard() {
   try {
@@ -3667,53 +3672,73 @@ function loadPitchBoard() {
   }
 }
 
-// Posiciones iniciales: plantilla en la mitad de abajo a la izquierda, rivales a la derecha
+function trayRows(squadSize) {
+  return Math.max(2, Math.ceil(squadSize / TRAY_COLS), Math.ceil(RIVAL_IDS.length / TRAY_COLS));
+}
+
+// Posiciones iniciales: plantilla en la bandeja de debajo a la izquierda, rivales a la derecha
 function defaultPitchPositions(squad) {
-  const positions = { ball: { x: 34, y: 52.5 } };
+  const positions = { ball: { x: 52.5, y: 34 } };
   const place = (ids, xStart) => {
-    const cols = Math.max(2, Math.ceil(ids.length / 5));
-    const colW = 34 / cols;
+    const colW = 51 / TRAY_COLS;
     ids.forEach((id, i) => {
       positions[id] = {
-        x: xStart + (i % cols + 0.5) * colW,
-        y: 60 + Math.floor(i / cols) * 9.4,
+        x: xStart + (i % TRAY_COLS + 0.5) * colW,
+        y: TRAY_TOP + 5 + Math.floor(i / TRAY_COLS) * TRAY_ROW_H,
       };
     });
   };
   place(squad.map((p) => p.id), 0);
-  place(RIVAL_IDS, 34);
+  place(RIVAL_IDS, 54);
   return positions;
+}
+
+function distToSegment(p, a, b) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a[0]) * dx + (p.y - a[1]) * dy) / lenSq));
+  return Math.hypot(p.x - (a[0] + t * dx), p.y - (a[1] + t * dy));
+}
+
+function strokeTouches(stroke, p) {
+  const reach = ERASER_RADIUS + stroke.width / 2;
+  if (stroke.pts.length === 1) return Math.hypot(p.x - stroke.pts[0][0], p.y - stroke.pts[0][1]) <= reach;
+  for (let i = 1; i < stroke.pts.length; i++) {
+    if (distToSegment(p, stroke.pts[i - 1], stroke.pts[i]) <= reach) return true;
+  }
+  return false;
 }
 
 function PitchLines() {
   const stroke = { fill: "none", stroke: PITCH_LINE, strokeWidth: 0.35 };
   return (
     <g>
-      <rect x="0" y="0" width="68" height="105" fill="#2E7D32" />
-      {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-        <rect key={i} x="0" y={i * 15} width="68" height="7.5" fill="rgba(0,0,0,0.06)" />
+      <rect x="0" y="0" width="105" height="68" fill="#2E7D32" />
+      {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
+        <rect key={i} x={i * 10.5 + 5.25} y="0" width="5.25" height="68" fill="rgba(0,0,0,0.06)" />
       ))}
-      <rect x="0" y="0" width="68" height="105" {...stroke} />
-      <line x1="0" y1="52.5" x2="68" y2="52.5" {...stroke} />
-      <circle cx="34" cy="52.5" r="9.15" {...stroke} />
-      <circle cx="34" cy="52.5" r="0.5" fill={PITCH_LINE} />
-      {/* Área arriba */}
-      <rect x="13.84" y="0" width="40.32" height="16.5" {...stroke} />
-      <rect x="24.84" y="0" width="18.32" height="5.5" {...stroke} />
-      <circle cx="34" cy="11" r="0.5" fill={PITCH_LINE} />
-      <path d="M 26.69 16.5 A 9.15 9.15 0 0 0 41.31 16.5" {...stroke} />
-      <rect x="30.34" y="-1.5" width="7.32" height="1.5" {...stroke} />
-      {/* Área abajo */}
-      <rect x="13.84" y="88.5" width="40.32" height="16.5" {...stroke} />
-      <rect x="24.84" y="99.5" width="18.32" height="5.5" {...stroke} />
-      <circle cx="34" cy="94" r="0.5" fill={PITCH_LINE} />
-      <path d="M 26.69 88.5 A 9.15 9.15 0 0 1 41.31 88.5" {...stroke} />
-      <rect x="30.34" y="105" width="7.32" height="1.5" {...stroke} />
+      <rect x="0" y="0" width="105" height="68" {...stroke} />
+      <line x1="52.5" y1="0" x2="52.5" y2="68" {...stroke} />
+      <circle cx="52.5" cy="34" r="9.15" {...stroke} />
+      <circle cx="52.5" cy="34" r="0.5" fill={PITCH_LINE} />
+      {/* Área izquierda */}
+      <rect x="0" y="13.84" width="16.5" height="40.32" {...stroke} />
+      <rect x="0" y="24.84" width="5.5" height="18.32" {...stroke} />
+      <circle cx="11" cy="34" r="0.5" fill={PITCH_LINE} />
+      <path d="M 16.5 26.69 A 9.15 9.15 0 0 1 16.5 41.31" {...stroke} />
+      <rect x="-1.5" y="30.34" width="1.5" height="7.32" {...stroke} />
+      {/* Área derecha */}
+      <rect x="88.5" y="13.84" width="16.5" height="40.32" {...stroke} />
+      <rect x="99.5" y="24.84" width="5.5" height="18.32" {...stroke} />
+      <circle cx="94" cy="34" r="0.5" fill={PITCH_LINE} />
+      <path d="M 88.5 26.69 A 9.15 9.15 0 0 0 88.5 41.31" {...stroke} />
+      <rect x="105" y="30.34" width="1.5" height="7.32" {...stroke} />
       {/* Córners */}
       <path d="M 0 1 A 1 1 0 0 0 1 0" {...stroke} />
-      <path d="M 67 0 A 1 1 0 0 0 68 1" {...stroke} />
-      <path d="M 0 104 A 1 1 0 0 1 1 105" {...stroke} />
-      <path d="M 68 104 A 1 1 0 0 0 67 105" {...stroke} />
+      <path d="M 104 0 A 1 1 0 0 0 105 1" {...stroke} />
+      <path d="M 0 67 A 1 1 0 0 1 1 68" {...stroke} />
+      <path d="M 104 68 A 1 1 0 0 1 105 67" {...stroke} />
     </g>
   );
 }
@@ -3729,9 +3754,11 @@ function PitchScreen({ squad, onBack }) {
   const [mode, setMode] = useState("mover");
   const [color, setColor] = useState(PITCH_COLORS[1].value);
   const [thick, setThick] = useState(false);
+  const [eraserPos, setEraserPos] = useState(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
   const drawingRef = useRef(false);
+  const erasingRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -3739,7 +3766,8 @@ function PitchScreen({ squad, onBack }) {
     } catch (e) {}
   }, [positions, strokes]);
 
-  // Jugadores nuevos de la plantilla que aún no tienen posición
+  const rows = trayRows(squad.length);
+  const trayBottom = TRAY_TOP + rows * TRAY_ROW_H + 2;
   const tokenIds = [...squad.map((p) => p.id), ...RIVAL_IDS];
   const defaults = defaultPitchPositions(squad);
   const posOf = (id) => positions[id] || defaults[id];
@@ -3751,6 +3779,13 @@ function PitchScreen({ squad, onBack }) {
     pt.y = e.clientY;
     const p = pt.matrixTransform(svg.getScreenCTM().inverse());
     return { x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 };
+  }
+
+  function erase(p) {
+    setStrokes((prev) => {
+      const next = prev.filter((s) => !strokeTouches(s, p));
+      return next.length === prev.length ? prev : next;
+    });
   }
 
   function handleTokenDown(e, id) {
@@ -3766,7 +3801,7 @@ function PitchScreen({ squad, onBack }) {
       const p = toSvgPoint(e);
       setPositions((prev) => ({
         ...prev,
-        [id]: { x: Math.min(70, Math.max(-2, p.x)), y: Math.min(107, Math.max(-2, p.y)) },
+        [id]: { x: Math.min(107, Math.max(-2, p.x)), y: Math.min(trayBottom, Math.max(-2, p.y)) },
       }));
     } else if (mode === "dibujar" && drawingRef.current) {
       const p = toSvgPoint(e);
@@ -3774,20 +3809,32 @@ function PitchScreen({ squad, onBack }) {
         const last = prev[prev.length - 1];
         return [...prev.slice(0, -1), { ...last, pts: [...last.pts, [p.x, p.y]] }];
       });
+    } else if (mode === "goma") {
+      const p = toSvgPoint(e);
+      setEraserPos(p);
+      if (erasingRef.current) erase(p);
     }
   }
 
   function handleDown(e) {
-    if (mode !== "dibujar") return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const p = toSvgPoint(e);
-    drawingRef.current = true;
-    setStrokes((prev) => [...prev, { color, width: thick ? 1.1 : 0.5, pts: [[p.x, p.y]] }]);
+    if (mode === "dibujar") {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const p = toSvgPoint(e);
+      drawingRef.current = true;
+      setStrokes((prev) => [...prev, { color, width: thick ? 1.1 : 0.5, pts: [[p.x, p.y]] }]);
+    } else if (mode === "goma") {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const p = toSvgPoint(e);
+      erasingRef.current = true;
+      setEraserPos(p);
+      erase(p);
+    }
   }
 
   function handleUp() {
     dragRef.current = null;
     drawingRef.current = false;
+    erasingRef.current = false;
   }
 
   function resetTokens() {
@@ -3810,6 +3857,11 @@ function PitchScreen({ squad, onBack }) {
     </button>
   );
 
+  const tokenStyle = {
+    cursor: mode === "mover" ? "grab" : "crosshair",
+    pointerEvents: mode === "mover" ? "auto" : "none",
+  };
+
   return (
     <div
       style={{
@@ -3830,6 +3882,7 @@ function PitchScreen({ squad, onBack }) {
         </button>
         {modeBtn("mover", "✋ Mover")}
         {modeBtn("dibujar", "✏️ Lápiz")}
+        {modeBtn("goma", "🧽 Goma")}
         <div className="flex items-center gap-2" style={{ opacity: mode === "dibujar" ? 1 : 0.5 }}>
           {PITCH_COLORS.map((c) => (
             <button
@@ -3865,7 +3918,7 @@ function PitchScreen({ squad, onBack }) {
           className="mp-btn px-3 py-2 text-sm disabled:opacity-40"
           style={{ color: "var(--crimson)" }}
         >
-          Borrar dibujo
+          Borrar todo
         </button>
         <button onClick={resetTokens} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
           Recolocar
@@ -3874,12 +3927,13 @@ function PitchScreen({ squad, onBack }) {
 
       <svg
         ref={svgRef}
-        viewBox="-3 -3 74 111"
+        viewBox={`-3 -3 111 ${trayBottom + 3}`}
         preserveAspectRatio="xMidYMid meet"
         onPointerDown={handleDown}
         onPointerMove={handleMove}
         onPointerUp={handleUp}
         onPointerCancel={handleUp}
+        onPointerLeave={() => setEraserPos(null)}
         style={{
           flex: 1,
           minHeight: 0,
@@ -3887,14 +3941,23 @@ function PitchScreen({ squad, onBack }) {
           touchAction: "none",
           userSelect: "none",
           WebkitUserSelect: "none",
-          cursor: mode === "dibujar" ? "crosshair" : "default",
+          cursor: mode === "mover" ? "default" : "crosshair",
         }}
       >
         <PitchLines />
 
+        {/* Bandeja debajo del campo */}
+        <rect x="0" y={TRAY_TOP} width="51" height={trayBottom - TRAY_TOP} rx="2" fill="rgba(244,241,232,0.08)" />
+        <rect x="54" y={TRAY_TOP} width="51" height={trayBottom - TRAY_TOP} rx="2" fill="rgba(209,55,62,0.16)" />
+        <text x="1.5" y={TRAY_TOP + 2.6} fontSize="2.2" fontWeight="600" fill="rgba(244,241,232,0.7)">
+          MI EQUIPO
+        </text>
+        <text x="55.5" y={TRAY_TOP + 2.6} fontSize="2.2" fontWeight="600" fill="rgba(244,241,232,0.7)">
+          RIVAL
+        </text>
+
         {tokenIds.map((id) => {
           const pos = posOf(id);
-          if (!pos) return null;
           const rival = id.startsWith("rival_");
           const player = rival ? null : squad.find((p) => p.id === id);
           const label = rival ? id.split("_")[1] : player.number;
@@ -3903,7 +3966,7 @@ function PitchScreen({ squad, onBack }) {
               key={id}
               transform={`translate(${pos.x} ${pos.y})`}
               onPointerDown={(e) => handleTokenDown(e, id)}
-              style={{ cursor: mode === "mover" ? "grab" : "crosshair", pointerEvents: mode === "mover" ? "auto" : "none" }}
+              style={tokenStyle}
             >
               <circle r="3.6" fill={rival ? "#D1373E" : "#F4F1E8"} stroke={rival ? "#7A1B20" : "#16241C"} strokeWidth="0.4" />
               <text
@@ -3940,7 +4003,7 @@ function PitchScreen({ squad, onBack }) {
         <g
           transform={`translate(${posOf("ball").x} ${posOf("ball").y})`}
           onPointerDown={(e) => handleTokenDown(e, "ball")}
-          style={{ cursor: mode === "mover" ? "grab" : "crosshair", pointerEvents: mode === "mover" ? "auto" : "none" }}
+          style={tokenStyle}
         >
           <circle r="2.8" fill="#FFFFFF" stroke="#111" strokeWidth="0.3" />
           <text textAnchor="middle" dominantBaseline="central" fontSize="4.6" style={{ pointerEvents: "none" }}>
@@ -3961,6 +4024,17 @@ function PitchScreen({ squad, onBack }) {
               strokeLinejoin="round"
             />
           ))}
+          {mode === "goma" && eraserPos && (
+            <circle
+              cx={eraserPos.x}
+              cy={eraserPos.y}
+              r={ERASER_RADIUS}
+              fill="rgba(255,255,255,0.15)"
+              stroke="#FFFFFF"
+              strokeWidth="0.3"
+              strokeDasharray="0.8 0.6"
+            />
+          )}
         </g>
       </svg>
     </div>
