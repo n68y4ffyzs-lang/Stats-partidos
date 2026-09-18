@@ -1828,6 +1828,101 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
   const pitchRef = useRef(null);
   const positions = match.positions || {};
 
+  // Lápiz y goma sobre el campo: los trazos se guardan en el partido (coordenadas 0..105 x 0..68)
+  const [mode, setMode] = useState("mover");
+  const [color, setColor] = useState(PITCH_COLORS[1].value);
+  const [thick, setThick] = useState(false);
+  const [eraserPos, setEraserPos] = useState(null);
+  const [strokes, setStrokes] = useState(match.strokes || []);
+  const strokesRef = useRef(strokes);
+  const svgRef = useRef(null);
+  const drawingRef = useRef(false);
+  const erasingRef = useRef(false);
+  const dirtyRef = useRef(false);
+
+  // Si el dibujo cambia desde otro dispositivo, lo recogemos (salvo si estamos pintando ahora mismo)
+  useEffect(() => {
+    if (match.strokes && match.strokes !== strokesRef.current && !drawingRef.current && !erasingRef.current) {
+      strokesRef.current = match.strokes;
+      setStrokes(match.strokes);
+    }
+  }, [match.strokes]);
+
+  function setStrokesLocal(next) {
+    strokesRef.current = next;
+    setStrokes(next);
+  }
+
+  function commitStrokes(next) {
+    setStrokesLocal(next);
+    onUpdate({ ...match, strokes: next }, true);
+  }
+
+  function toPitchPoint(e) {
+    const rect = svgRef.current.getBoundingClientRect();
+    return {
+      x: Math.round(((e.clientX - rect.left) / rect.width) * 105 * 100) / 100,
+      y: Math.round(((e.clientY - rect.top) / rect.height) * 68 * 100) / 100,
+    };
+  }
+
+  function eraseAt(p) {
+    const prev = strokesRef.current;
+    const next = prev.filter((s) => !strokeTouches(s, p));
+    if (next.length !== prev.length) {
+      dirtyRef.current = true;
+      setStrokesLocal(next);
+    }
+  }
+
+  function handleDrawDown(e) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = toPitchPoint(e);
+    if (mode === "dibujar") {
+      drawingRef.current = true;
+      setStrokesLocal([...strokesRef.current, { color, width: thick ? 1.1 : 0.5, pts: [[p.x, p.y]] }]);
+    } else if (mode === "goma") {
+      erasingRef.current = true;
+      setEraserPos(p);
+      eraseAt(p);
+    }
+  }
+
+  function handleDrawMove(e) {
+    if (mode === "dibujar" && drawingRef.current) {
+      const p = toPitchPoint(e);
+      const prev = strokesRef.current;
+      const last = prev[prev.length - 1];
+      setStrokesLocal([...prev.slice(0, -1), { ...last, pts: [...last.pts, [p.x, p.y]] }]);
+    } else if (mode === "goma") {
+      const p = toPitchPoint(e);
+      setEraserPos(p);
+      if (erasingRef.current) eraseAt(p);
+    }
+  }
+
+  function handleDrawUp() {
+    if (drawingRef.current || (erasingRef.current && dirtyRef.current)) commitStrokes(strokesRef.current);
+    drawingRef.current = false;
+    erasingRef.current = false;
+    dirtyRef.current = false;
+  }
+
+  function changeMode(next) {
+    setMode(next);
+    setSelectedId(null);
+  }
+
+  const modeBtn = (id, label) => (
+    <button
+      onClick={() => changeMode(id)}
+      className="mp-btn px-3 py-2 text-sm"
+      style={mode === id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+    >
+      {label}
+    </button>
+  );
+
   const rosterOnPitch = match.onPitch.filter((id) => squad.some((p) => p.id === id));
   const rosterBench = match.bench.filter((id) => squad.some((p) => p.id === id));
 
@@ -1996,6 +2091,53 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
             </button>
           );
         })}
+
+        {/* Dibujo (por encima de las fichas); solo captura el dedo con el lápiz o la goma activos */}
+        <svg
+          ref={svgRef}
+          viewBox="0 0 105 68"
+          preserveAspectRatio="none"
+          onPointerDown={handleDrawDown}
+          onPointerMove={handleDrawMove}
+          onPointerUp={handleDrawUp}
+          onPointerCancel={handleDrawUp}
+          onPointerLeave={() => setEraserPos(null)}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: mode === "mover" ? "none" : "auto",
+            touchAction: "none",
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            cursor: "crosshair",
+          }}
+        >
+          {strokes.map((s, i) => (
+            <path
+              key={i}
+              d={strokePath(s.pts)}
+              fill="none"
+              stroke={s.color}
+              strokeWidth={s.width}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ))}
+          {mode === "goma" && eraserPos && (
+            <circle
+              cx={eraserPos.x}
+              cy={eraserPos.y}
+              r={ERASER_RADIUS}
+              fill="rgba(255,255,255,0.15)"
+              stroke="#FFFFFF"
+              strokeWidth="0.3"
+              strokeDasharray="0.8 0.6"
+            />
+          )}
+        </svg>
       </div>
 
       {selectedId && !selectedIsBench && (
@@ -2011,6 +2153,8 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
         </button>
       )}
 
+      <div className="md:grid md:grid-cols-[1fr_auto] md:gap-4 md:items-start">
+      <div>
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Sin colocar</div>
       <div className="flex flex-wrap gap-2 mb-4">
         {unplacedIds.length === 0 && (
@@ -2057,6 +2201,57 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
             </div>
           );
         })}
+      </div>
+      </div>
+
+      {/* Herramientas de dibujo: en el hueco de abajo a la derecha del campo */}
+      <div className="mp-card p-3 mt-4 md:mt-0" style={{ maxWidth: 300 }}>
+        <div className="mb-2 text-xs" style={{ color: "var(--chalk-dim)" }}>Dibujar sobre el campo</div>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {modeBtn("mover", "✋ Mover")}
+          {modeBtn("dibujar", "✏️ Lápiz")}
+          {modeBtn("goma", "🧽 Goma")}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 mb-2" style={{ opacity: mode === "dibujar" ? 1 : 0.5 }}>
+          {PITCH_COLORS.map((c) => (
+            <button
+              key={c.id}
+              aria-label={`Color ${c.id}`}
+              onClick={() => {
+                setColor(c.value);
+                changeMode("dibujar");
+              }}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 999,
+                background: c.value,
+                border: color === c.value ? "3px solid var(--cielo)" : "2px solid rgba(244,241,232,0.4)",
+              }}
+            />
+          ))}
+          <button onClick={() => setThick((t) => !t)} className="mp-btn px-2 py-1 text-xs">
+            {thick ? "Trazo grueso" : "Trazo fino"}
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => commitStrokes(strokes.slice(0, -1))}
+            disabled={strokes.length === 0}
+            className="mp-btn px-3 py-2 text-sm disabled:opacity-40"
+          >
+            Deshacer
+          </button>
+          <button
+            onClick={() => commitStrokes([])}
+            disabled={strokes.length === 0}
+            className="mp-btn px-3 py-2 text-sm disabled:opacity-40"
+            style={{ color: "var(--crimson)" }}
+          >
+            Borrar todo
+          </button>
+        </div>
+      </div>
       </div>
     </div>
   );
@@ -3715,6 +3910,12 @@ function distToSegment(p, a, b) {
   return Math.hypot(p.x - (a[0] + t * dx), p.y - (a[1] + t * dy));
 }
 
+function strokePath(pts) {
+  return pts.length === 1
+    ? `M ${pts[0][0]} ${pts[0][1]} l 0.01 0`
+    : "M " + pts.map((p) => `${p[0]} ${p[1]}`).join(" L ");
+}
+
 function strokeTouches(stroke, p) {
   const reach = ERASER_RADIUS + stroke.width / 2;
   if (stroke.pts.length === 1) return Math.hypot(p.x - stroke.pts[0][0], p.y - stroke.pts[0][1]) <= reach;
@@ -3862,11 +4063,6 @@ function PitchScreen({ squad, onBack }) {
     const atTop = el.scrollTop < 20;
     el.scrollTo({ top: atTop ? el.scrollHeight : 0, behavior: "smooth" });
   }
-
-  const strokePath = (pts) =>
-    pts.length === 1
-      ? `M ${pts[0][0]} ${pts[0][1]} l 0.01 0`
-      : "M " + pts.map((p) => `${p[0]} ${p[1]}`).join(" L ");
 
   const modeBtn = (id, label) => (
     <button
