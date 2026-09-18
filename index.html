@@ -987,6 +987,8 @@ function Home({
   onGoSync,
   onImportCalendar,
   calendarImport,
+  onImportCrests,
+  crestImport,
 }) {
   const [search, setSearch] = useState("");
   const [matchesTab, setMatchesTab] = useState("lista");
@@ -1064,6 +1066,22 @@ function Home({
           style={{ color: calendarImport.message.startsWith("Error") ? "var(--crimson)" : "var(--chalk-dim)" }}
         >
           {calendarImport.message}
+        </div>
+      )}
+
+      <button
+        onClick={onImportCrests}
+        disabled={crestImport.loading}
+        className="mp-btn mp-btn-outline w-full px-2 py-1.5 text-xs mb-2 disabled:opacity-40"
+      >
+        {crestImport.loading ? "Descargando escudos…" : "Descargar escudos de la FFCV"}
+      </button>
+      {crestImport.message && (
+        <div
+          className="text-xs mb-2"
+          style={{ color: crestImport.message.startsWith("Error") ? "var(--crimson)" : "var(--chalk-dim)" }}
+        >
+          {crestImport.message}
         </div>
       )}
 
@@ -4481,6 +4499,7 @@ function App() {
   const [syncStatus, setSyncStatus] = useState("unconfigured");
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [calendarImport, setCalendarImport] = useState({ loading: false, message: null });
+  const [crestImport, setCrestImport] = useState({ loading: false, message: null });
 
   const configured = isValidSupabaseConfig(supabaseConfig.url, supabaseConfig.key);
 
@@ -4678,6 +4697,55 @@ function App() {
         ? { ...crests, own: dataUrl }
         : { ...crests, rivals: { ...crests.rivals, [crestKey(name)]: dataUrl } };
     commit({ ...dataRef.current, crests: next });
+  }
+
+  // Descarga de la FFCV los escudos de todos los equipos del grupo (el nuestro incluido).
+  // Solo rellena los que aún no tienen escudo: los que hayas elegido a mano no se tocan.
+  async function importFfcvCrests() {
+    setCrestImport({ loading: true, message: null });
+    try {
+      const r = await fetch("/api/clasificacion");
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || "No se pudo consultar la FFCV");
+      const teams = (body.clasificacion || []).filter((t) => t.escudo);
+      const base = dataRef.current.crests || emptyCrests();
+      const missing = teams.filter((t) =>
+        t.codequipo === LEAGUE_TEAM_CODE ? !base.own : !base.rivals[crestKey(t.nombre)]
+      );
+      const results = await Promise.all(
+        missing.map(async (t) => {
+          try {
+            const ir = await fetch("/api/escudo?p=" + encodeURIComponent(t.escudo));
+            if (!ir.ok) throw new Error("sin imagen");
+            return { team: t, url: await resizeCrest(await ir.blob()) };
+          } catch (e) {
+            return { team: t, url: null };
+          }
+        })
+      );
+      const current = dataRef.current.crests || emptyCrests();
+      let own = current.own;
+      const rivals = { ...current.rivals };
+      let added = 0;
+      let failed = 0;
+      results.forEach(({ team, url }) => {
+        if (!url) {
+          failed++;
+          return;
+        }
+        if (team.codequipo === LEAGUE_TEAM_CODE) own = url;
+        else rivals[crestKey(team.nombre)] = url;
+        added++;
+      });
+      if (added > 0) commit({ ...dataRef.current, crests: { own, rivals } });
+      const msg =
+        added === 0 && failed === 0
+          ? "Ya tienes los escudos de todos los equipos del grupo."
+          : `Escudos descargados de la FFCV: ${added}.` + (failed ? ` No se pudieron descargar ${failed}.` : "");
+      setCrestImport({ loading: false, message: msg });
+    } catch (e) {
+      setCrestImport({ loading: false, message: `Error: ${e.message || "no se pudieron descargar los escudos"}` });
+    }
   }
 
   function goHome() {
@@ -4899,6 +4967,8 @@ function App() {
           onGoSync={() => setView("sync")}
           onImportCalendar={importFfcvCalendar}
           calendarImport={calendarImport}
+          onImportCrests={importFfcvCrests}
+          crestImport={crestImport}
         />
       )}
       {view === "squad" && (

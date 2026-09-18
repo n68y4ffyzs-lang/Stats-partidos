@@ -79,6 +79,7 @@ module.exports = async (req, res) => {
         posicion: Number(r.posicion),
         codequipo: String(r.codequipo),
         nombre: r.nombre,
+        escudo: r.url_img || null, // ruta del escudo (se descarga con /api/escudo)
         jugados: Number(r.jugados),
         ganados: Number(r.ganados),
         empatados: Number(r.empatados),
