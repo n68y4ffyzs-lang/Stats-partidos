@@ -1839,6 +1839,7 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
   const dirtyRef = useRef(false);
+  useBlockTouchScroll(svgRef, mode !== "mover");
 
   // Si el dibujo cambia desde otro dispositivo, lo recogemos (salvo si estamos pintando ahora mismo)
   useEffect(() => {
@@ -3910,6 +3911,18 @@ function distToSegment(p, a, b) {
   return Math.hypot(p.x - (a[0] + t * dx), p.y - (a[1] + t * dy));
 }
 
+// Mientras se dibuja o borra, un gesto que empieza sobre el campo no debe hacer scroll de la pantalla
+// (Safari en iPad no siempre respeta touch-action, así que se cancela también el touchmove)
+function useBlockTouchScroll(ref, active) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !active) return;
+    const block = (e) => e.preventDefault();
+    el.addEventListener("touchmove", block, { passive: false });
+    return () => el.removeEventListener("touchmove", block);
+  }, [active]);
+}
+
 function strokePath(pts) {
   return pts.length === 1
     ? `M ${pts[0][0]} ${pts[0][1]} l 0.01 0`
@@ -3973,6 +3986,7 @@ function PitchScreen({ squad, onBack }) {
   const dragRef = useRef(null);
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
+  useBlockTouchScroll(svgRef, mode !== "mover");
 
   useEffect(() => {
     try {
