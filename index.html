@@ -348,6 +348,36 @@ function removeWhiteBackground(dataUrl) {
   });
 }
 
+// Versión en blanco de un escudo (para pintarlo sobre el césped): conserva la forma y los detalles,
+// que quedan más tenues cuanto más claros eran en el original. Devuelve un data URL PNG.
+function whiteCrest(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve(null);
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const px = imageData.data;
+        for (let i = 0; i < px.length; i += 4) {
+          const lum = (0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]) / 255;
+          px[i + 3] = Math.round(px[i + 3] * (0.25 + 0.75 * (1 - lum)));
+          px[i] = px[i + 1] = px[i + 2] = 255;
+        }
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL("image/png"));
+      } catch (e) {
+        resolve(null);
+      }
+    };
+    img.src = dataUrl;
+  });
+}
+
 // Escudo pequeño; si no hay imagen y `empty` es true, un círculo vacío del mismo tamaño
 function CrestImage({ src, size = 24, empty = false }) {
   if (!src) {
@@ -4253,7 +4283,7 @@ function PitchLines() {
   );
 }
 
-function PitchScreen({ squad, onBack }) {
+function PitchScreen({ squad, crests, onBack }) {
   const initial = useRef(null);
   if (!initial.current) initial.current = loadPitchBoard();
   // Solo se guardan las fichas que el usuario ha movido; el resto sigue el reparto por defecto
@@ -4269,6 +4299,21 @@ function PitchScreen({ squad, onBack }) {
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
   useBlockTouchScroll(svgRef, mode !== "mover");
+
+  // Nuestro escudo en blanco, pintado en el centro del campo
+  const [centerCrest, setCenterCrest] = useState(null);
+  const ownCrestSrc = crests && crests.own;
+  useEffect(() => {
+    let alive = true;
+    if (!ownCrestSrc) {
+      setCenterCrest(null);
+      return undefined;
+    }
+    whiteCrest(ownCrestSrc).then((url) => alive && setCenterCrest(url));
+    return () => {
+      alive = false;
+    };
+  }, [ownCrestSrc]);
 
   useEffect(() => {
     try {
@@ -4463,6 +4508,18 @@ function PitchScreen({ squad, onBack }) {
           }}
         >
           <PitchLines />
+          {centerCrest && (
+            <image
+              href={centerCrest}
+              x="45.5"
+              y="27"
+              width="14"
+              height="14"
+              preserveAspectRatio="xMidYMid meet"
+              opacity="0.85"
+              style={{ pointerEvents: "none" }}
+            />
+          )}
 
           {/* Franjas de fichas debajo del campo */}
           <rect x="0" y={layout.topA} width="105" height={layout.hA} rx="1.5" fill="rgba(244,241,232,0.1)" />
@@ -5151,7 +5208,7 @@ function App() {
           onBack={goHome}
         />
       )}
-      {view === "pitch" && <PitchScreen squad={data.squad} onBack={goHome} />}
+      {view === "pitch" && <PitchScreen squad={data.squad} crests={data.crests} onBack={goHome} />}
       {view === "sync" && (
         <SyncSettings
           status={syncStatus}
