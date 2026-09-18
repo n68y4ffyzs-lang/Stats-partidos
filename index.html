@@ -378,6 +378,22 @@ function whiteCrest(dataUrl) {
   });
 }
 
+function useWhiteCrest(src) {
+  const [white, setWhite] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    if (!src) {
+      setWhite(null);
+      return undefined;
+    }
+    whiteCrest(src).then((url) => alive && setWhite(url));
+    return () => {
+      alive = false;
+    };
+  }, [src]);
+  return white;
+}
+
 // Escudo pequeño; si no hay imagen y `empty` es true, un círculo vacío del mismo tamaño
 function CrestImage({ src, size = 24, empty = false }) {
   if (!src) {
@@ -1949,7 +1965,7 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
       </div>
 
       {tab === "campo" && (
-        <FieldFormation match={match} squad={squad} playerById={playerById} onUpdate={onUpdate} />
+        <FieldFormation match={match} squad={squad} crests={crests} playerById={playerById} onUpdate={onUpdate} />
       )}
 
       {tab === "estadisticas" && (
@@ -2137,10 +2153,11 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
 /* ---------------------------------------------------------
    Campo: colocar a cada jugador en su posición
 --------------------------------------------------------- */
-function FieldFormation({ match, squad, playerById, onUpdate }) {
+function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
   const [selectedId, setSelectedId] = useState(null);
   const pitchRef = useRef(null);
   const positions = match.positions || {};
+  const centerCrest = useWhiteCrest(crests && crests.own);
 
   // Lápiz y goma sobre el campo: los trazos se guardan en el partido (coordenadas 0..105 x 0..68)
   const [mode, setMode] = useState("mover");
@@ -2382,6 +2399,25 @@ function FieldFormation({ match, squad, playerById, onUpdate }) {
             </React.Fragment>
           );
         })()}
+
+        {/* Nuestro escudo en blanco en el centro del campo */}
+        {centerCrest && (
+          <img
+            src={centerCrest}
+            alt=""
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              width: "13.3%",
+              aspectRatio: "1 / 1",
+              objectFit: "contain",
+              transform: "translate(-50%, -50%)",
+              opacity: 0.85,
+              pointerEvents: "none",
+            }}
+          />
+        )}
 
         {placedIds.map((id) => {
           const p = playerById(id);
@@ -4301,19 +4337,7 @@ function PitchScreen({ squad, crests, onBack }) {
   useBlockTouchScroll(svgRef, mode !== "mover");
 
   // Nuestro escudo en blanco, pintado en el centro del campo
-  const [centerCrest, setCenterCrest] = useState(null);
-  const ownCrestSrc = crests && crests.own;
-  useEffect(() => {
-    let alive = true;
-    if (!ownCrestSrc) {
-      setCenterCrest(null);
-      return undefined;
-    }
-    whiteCrest(ownCrestSrc).then((url) => alive && setCenterCrest(url));
-    return () => {
-      alive = false;
-    };
-  }, [ownCrestSrc]);
+  const centerCrest = useWhiteCrest(crests && crests.own);
 
   useEffect(() => {
     try {
