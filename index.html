@@ -4248,7 +4248,9 @@ const SET_PIECE_TYPES = [
 --------------------------------------------------------- */
 function SetPieceCategoryEditor({ plays, squad, matches, category, onSave, onAssign }) {
   const [activePlayId, setActivePlayId] = useState(plays[0] ? plays[0].id : null);
-  const [mode, setMode] = useState("asignar"); // "asignar" | "formacion"
+  // Al entrar se ve siempre la formación guardada (qué jugadas tenemos), independientemente
+  // de si hay partidos con once elegido; asignar jugadores es un paso posterior, partido a partido.
+  const [mode, setMode] = useState("formacion"); // "formacion" | "asignar"
 
   const activePlay = plays.find((pl) => pl.id === activePlayId) || null;
 
@@ -4318,18 +4320,18 @@ function SetPieceCategoryEditor({ plays, squad, matches, category, onSave, onAss
 
           <div className="flex gap-2 mb-3">
             <button
-              onClick={() => setMode("asignar")}
-              className="mp-btn px-3 py-2 text-sm flex-1"
-              style={mode === "asignar" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-            >
-              Asignar jugadores
-            </button>
-            <button
               onClick={() => setMode("formacion")}
               className="mp-btn px-3 py-2 text-sm flex-1"
               style={mode === "formacion" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
             >
               Formación
+            </button>
+            <button
+              onClick={() => setMode("asignar")}
+              className="mp-btn px-3 py-2 text-sm flex-1"
+              style={mode === "asignar" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+            >
+              Asignar jugadores
             </button>
           </div>
 
