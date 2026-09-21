@@ -479,6 +479,27 @@ function ScoreWithCrests({ match, favor, contra, crests, onPickOwn, onPickRival,
   );
 }
 
+// Formato antiguo de una jugada de balón parado: positions = { [playerId]: {x,y}, ball: {x,y} },
+// es decir, las posiciones estaban atadas a un jugador concreto de la plantilla.
+// Formato nuevo: slots = [{id,x,y}], posiciones fijas independientes del jugador; qué jugador
+// ocupa cada slot se decide partido a partido (match.setPieceAssignments).
+function migratePlay(play) {
+  if (play.slots) return play;
+  const legacyPositions = play.positions || {};
+  const slots = Object.keys(legacyPositions)
+    .filter((k) => k !== "ball")
+    .map((playerId) => ({ id: genId(), x: legacyPositions[playerId].x, y: legacyPositions[playerId].y }));
+  return { id: play.id, name: play.name, slots, ball: legacyPositions.ball || null };
+}
+
+function migrateSetPiecePositions(raw) {
+  const out = {};
+  Object.keys(raw || {}).forEach((category) => {
+    out[category] = (Array.isArray(raw[category]) ? raw[category] : []).map(migratePlay);
+  });
+  return out;
+}
+
 function loadLocalData() {
   try {
     const raw = localStorage.getItem(DATA_KEY);
@@ -488,7 +509,7 @@ function loadLocalData() {
       squad: parsed.squad || [],
       matchesList: parsed.matchesList || [],
       matchesById: parsed.matchesById || {},
-      setPiecePositions: parsed.setPiecePositions || {},
+      setPiecePositions: migrateSetPiecePositions(parsed.setPiecePositions || {}),
       crests: {
         own: (parsed.crests && parsed.crests.own) || null,
         ownNoBg: !!(parsed.crests && parsed.crests.ownNoBg),
@@ -3738,273 +3759,465 @@ function cornerConcededCount(match) {
 }
 
 /* ---------------------------------------------------------
-   Medio campo: colocar a cada jugador según su posición
-   en las jugadas de balón parado (córner o falta, a favor o en contra)
+   Medio campo: marcas del terreno de juego, reutilizadas tanto por el
+   editor de formación (posiciones fijas) como por el de asignación
+   (qué titular ocupa cada posición fija en un partido concreto)
 --------------------------------------------------------- */
-function SetPieceBoard({ positions, squad, onSave }) {
-  const [selectedId, setSelectedId] = useState(null);
+function MiniPitchMarkings() {
+  return (
+    <React.Fragment>
+      {/* Portería */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: 0,
+          width: "22%",
+          height: "2.5%",
+          marginLeft: "-11%",
+          background: "rgba(255,255,255,0.55)",
+        }}
+      />
+      {/* Área pequeña */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: 0,
+          width: "30%",
+          height: "20%",
+          marginLeft: "-15%",
+          border: "2px solid rgba(255,255,255,0.55)",
+          borderTop: "none",
+        }}
+      />
+      {/* Área grande */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: 0,
+          width: "62%",
+          height: "42%",
+          marginLeft: "-31%",
+          border: "2px solid rgba(255,255,255,0.55)",
+          borderTop: "none",
+        }}
+      />
+      {/* Semicírculo del área */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: "42%",
+          width: "28%",
+          aspectRatio: "1 / 0.5",
+          marginLeft: "-14%",
+          border: "2px solid rgba(255,255,255,0.55)",
+          borderTop: "none",
+          borderRadius: "0 0 999px 999px",
+        }}
+      />
+      {/* Línea de medio campo */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 2,
+          background: "rgba(255,255,255,0.55)",
+        }}
+      />
+      {/* Círculo central (mitad visible desde la línea de medio campo) */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          bottom: 0,
+          width: "30%",
+          aspectRatio: "1 / 0.5",
+          marginLeft: "-15%",
+          border: "2px solid rgba(255,255,255,0.55)",
+          borderBottom: "none",
+          borderRadius: "999px 999px 0 0",
+        }}
+      />
+      {/* Banderines de córner */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: 14,
+          height: 14,
+          borderBottom: "2px solid rgba(255,255,255,0.55)",
+          borderRight: "2px solid rgba(255,255,255,0.55)",
+          borderRadius: "0 0 14px 0",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          width: 14,
+          height: 14,
+          borderBottom: "2px solid rgba(255,255,255,0.55)",
+          borderLeft: "2px solid rgba(255,255,255,0.55)",
+          borderRadius: "0 0 0 14px",
+        }}
+      />
+    </React.Fragment>
+  );
+}
+
+function MiniPitch({ pitchRef, onClick, children }) {
+  return (
+    <div
+      ref={pitchRef}
+      onClick={onClick}
+      className="relative w-full mx-auto mb-3"
+      style={{
+        maxWidth: 620,
+        aspectRatio: "68 / 50",
+        background: "#2E7D32",
+        borderRadius: 12,
+        border: "2px solid rgba(255,255,255,0.55)",
+        overflow: "hidden",
+      }}
+    >
+      <MiniPitchMarkings />
+      {children}
+    </div>
+  );
+}
+
+function clampPitchCoord(v, min, max) {
+  return Math.min(max, Math.max(min, v));
+}
+
+/* ---------------------------------------------------------
+   Formación de una jugada de balón parado: define posiciones fijas
+   en el campo (independientes del jugador). Qué titular ocupa cada
+   una se decide después, partido a partido, en SetPieceAssignmentBoard.
+--------------------------------------------------------- */
+function SetPieceFormationEditor({ slots, ball, onSave }) {
+  const [selected, setSelected] = useState(null); // { type: "slot", id } | { type: "ball" } | null
   const pitchRef = useRef(null);
 
-  function playerById(id) {
-    return squad.find((p) => p.id === id) || { id, number: "?", name: "Desconocido" };
-  }
-
-  const placedIds = squad.map((p) => p.id).filter((id) => positions[id]);
-  const unplacedIds = squad.map((p) => p.id).filter((id) => !positions[id]);
-
-  function setPosition(playerId, coords) {
-    onSave({ ...positions, [playerId]: coords });
-  }
-
-  function clearPosition(playerId) {
-    const next = { ...positions };
-    delete next[playerId];
-    onSave(next);
-  }
-
-  function handleSelect(id) {
-    setSelectedId((prev) => (prev === id ? null : id));
-  }
-
-  function handlePitchClick(e) {
-    if (!selectedId || !pitchRef.current) return;
+  function coordsFromEvent(e) {
     const rect = pitchRef.current.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
-    setPosition(selectedId, {
-      x: Math.min(97, Math.max(3, x)),
-      y: Math.min(94, Math.max(3, y)),
-    });
-    setSelectedId(null);
+    return { x: clampPitchCoord(x, 3, 97), y: clampPitchCoord(y, 3, 94) };
   }
 
-  if (squad.length === 0) {
-    return (
-      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-        Añade jugadores a la plantilla para poder colocarlos en el campo.
-      </div>
-    );
+  function addSlot() {
+    const newSlot = { id: genId(), x: 50, y: 50 };
+    onSave({ slots: [...slots, newSlot], ball });
+    setSelected({ type: "slot", id: newSlot.id });
+  }
+
+  function removeSlot(id) {
+    onSave({ slots: slots.filter((s) => s.id !== id), ball });
+    setSelected(null);
+  }
+
+  function moveSlot(id, coords) {
+    onSave({ slots: slots.map((s) => (s.id === id ? { ...s, ...coords } : s)), ball });
+  }
+
+  function addBall() {
+    onSave({ slots, ball: { x: 50, y: 30 } });
+    setSelected({ type: "ball" });
+  }
+
+  function moveBall(coords) {
+    onSave({ slots, ball: coords });
+  }
+
+  function removeBall() {
+    onSave({ slots, ball: null });
+    setSelected(null);
+  }
+
+  function handlePitchClick(e) {
+    if (!selected || !pitchRef.current) return;
+    const coords = coordsFromEvent(e);
+    if (selected.type === "slot") moveSlot(selected.id, coords);
+    else moveBall(coords);
+    setSelected(null);
   }
 
   return (
     <div>
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
-        {selectedId
-          ? `Toca el campo para colocar a ${selectedId === "ball" ? "el balón" : playerById(selectedId).name}`
-          : "Toca un jugador o el balón y luego el campo para colocarlo"}
+        {selected
+          ? `Toca el campo para colocar ${selected.type === "ball" ? "el balón" : "esta posición"}`
+          : "Toca una posición o el balón y luego el campo para moverlo"}
       </div>
 
-      <div
-        ref={pitchRef}
-        onClick={handlePitchClick}
-        className="relative w-full mx-auto mb-3"
-        style={{
-          maxWidth: 620,
-          aspectRatio: "68 / 50",
-          background: "#2E7D32",
-          borderRadius: 12,
-          border: "2px solid rgba(255,255,255,0.55)",
-          overflow: "hidden",
-        }}
-      >
-        {/* Portería */}
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: 0,
-            width: "22%",
-            height: "2.5%",
-            marginLeft: "-11%",
-            background: "rgba(255,255,255,0.55)",
-          }}
-        />
-        {/* Área pequeña */}
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: 0,
-            width: "30%",
-            height: "20%",
-            marginLeft: "-15%",
-            border: "2px solid rgba(255,255,255,0.55)",
-            borderTop: "none",
-          }}
-        />
-        {/* Área grande */}
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: 0,
-            width: "62%",
-            height: "42%",
-            marginLeft: "-31%",
-            border: "2px solid rgba(255,255,255,0.55)",
-            borderTop: "none",
-          }}
-        />
-        {/* Semicírculo del área */}
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "42%",
-            width: "28%",
-            aspectRatio: "1 / 0.5",
-            marginLeft: "-14%",
-            border: "2px solid rgba(255,255,255,0.55)",
-            borderTop: "none",
-            borderRadius: "0 0 999px 999px",
-          }}
-        />
-        {/* Línea de medio campo */}
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: 2,
-            background: "rgba(255,255,255,0.55)",
-          }}
-        />
-        {/* Círculo central (mitad visible desde la línea de medio campo) */}
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            bottom: 0,
-            width: "30%",
-            aspectRatio: "1 / 0.5",
-            marginLeft: "-15%",
-            border: "2px solid rgba(255,255,255,0.55)",
-            borderBottom: "none",
-            borderRadius: "999px 999px 0 0",
-          }}
-        />
-        {/* Banderines de córner */}
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            width: 14,
-            height: 14,
-            borderBottom: "2px solid rgba(255,255,255,0.55)",
-            borderRight: "2px solid rgba(255,255,255,0.55)",
-            borderRadius: "0 0 14px 0",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            right: 0,
-            top: 0,
-            width: 14,
-            height: 14,
-            borderBottom: "2px solid rgba(255,255,255,0.55)",
-            borderLeft: "2px solid rgba(255,255,255,0.55)",
-            borderRadius: "0 0 0 14px",
-          }}
-        />
-
-        {placedIds.map((id) => {
-          const p = playerById(id);
-          const pos = positions[id];
-          const selected = selectedId === id;
+      <MiniPitch pitchRef={pitchRef} onClick={handlePitchClick}>
+        {slots.map((slot, i) => {
+          const isSelected = selected && selected.type === "slot" && selected.id === slot.id;
           return (
             <button
-              key={id}
+              key={slot.id}
               onClick={(e) => {
                 e.stopPropagation();
-                handleSelect(id);
+                setSelected(isSelected ? null : { type: "slot", id: slot.id });
               }}
-              className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+              className={`mp-shirt w-10 h-10 text-sm font-semibold ${isSelected ? "selected" : ""}`}
               style={{
                 position: "absolute",
-                left: `${pos.x}%`,
-                top: `${pos.y}%`,
+                left: `${slot.x}%`,
+                top: `${slot.y}%`,
                 transform: "translate(-50%, -50%)",
               }}
             >
-              {p.number}
+              {i + 1}
             </button>
           );
         })}
 
-        {positions.ball && (
+        {ball && (
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleSelect("ball");
+              setSelected(selected && selected.type === "ball" ? null : { type: "ball" });
             }}
-            className={`mp-shirt w-8 h-8 text-base ${selectedId === "ball" ? "selected" : ""}`}
+            className={`mp-shirt w-8 h-8 text-base ${selected && selected.type === "ball" ? "selected" : ""}`}
             style={{
               position: "absolute",
-              left: `${positions.ball.x}%`,
-              top: `${positions.ball.y}%`,
+              left: `${ball.x}%`,
+              top: `${ball.y}%`,
               transform: "translate(-50%, -50%)",
-              background: selectedId === "ball" ? undefined : "#F4F1E8",
+              background: selected && selected.type === "ball" ? undefined : "#F4F1E8",
             }}
           >
             ⚽
           </button>
         )}
+      </MiniPitch>
+
+      {selected && selected.type === "slot" && (
+        <button
+          onClick={() => removeSlot(selected.id)}
+          className="mp-btn mp-btn-outline w-full py-2 text-xs mb-3"
+          style={{ color: "var(--crimson)" }}
+        >
+          Eliminar esta posición
+        </button>
+      )}
+      {selected && selected.type === "ball" && (
+        <button
+          onClick={removeBall}
+          className="mp-btn mp-btn-outline w-full py-2 text-xs mb-3"
+          style={{ color: "var(--crimson)" }}
+        >
+          Quitar el balón del campo
+        </button>
+      )}
+
+      <div className="flex gap-2">
+        <button onClick={addSlot} className="mp-btn mp-btn-primary px-3 py-2 text-sm flex-1">
+          + Añadir posición
+        </button>
+        {!ball && (
+          <button onClick={addBall} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+            ⚽ Añadir balón
+          </button>
+        )}
+      </div>
+      <div className="text-xs mt-2" style={{ color: "var(--chalk-dim)" }}>
+        {slots.length} posición{slots.length === 1 ? "" : "es"} fija{slots.length === 1 ? "" : "s"}. Luego, en
+        "Asignar jugadores", eliges qué titular ocupa cada una en cada partido.
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Asignación de una jugada de balón parado: para un partido concreto,
+   qué titular de ese once ocupa cada posición fija ya definida.
+--------------------------------------------------------- */
+function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId, onAssign }) {
+  const eligibleMatches = matches
+    .filter((m) => m.onPitch && m.onPitch.length > 0)
+    .slice()
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const [matchId, setMatchId] = useState(eligibleMatches[0] ? eligibleMatches[0].id : null);
+  const [selectedPlayerId, setSelectedPlayerId] = useState(null);
+  const [selectedSlotId, setSelectedSlotId] = useState(null);
+
+  const match = eligibleMatches.find((m) => m.id === matchId) || eligibleMatches[0] || null;
+
+  function playerById(id) {
+    return squad.find((p) => p.id === id) || { id, number: "?", name: "Desconocido" };
+  }
+
+  if (slots.length === 0) {
+    return (
+      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+        Primero define las posiciones fijas de esta jugada en "Formación".
+      </div>
+    );
+  }
+
+  if (!match) {
+    return (
+      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+        Todavía no hay ningún partido con el once inicial elegido.
+      </div>
+    );
+  }
+
+  const assignments =
+    (match.setPieceAssignments && match.setPieceAssignments[category] && match.setPieceAssignments[category][playId]) ||
+    {};
+  const assignedPlayerIds = new Set(Object.values(assignments));
+  const roster = match.onPitch.filter((id) => squad.some((sp) => sp.id === id)).map(playerById);
+  const unassigned = roster.filter((p) => !assignedPlayerIds.has(p.id));
+
+  function saveAssignments(next) {
+    onAssign(match.id, category, playId, next);
+  }
+
+  function assignSlot(slotId, playerId) {
+    const next = { ...assignments };
+    // Un jugador solo puede ocupar una posición a la vez: si ya estaba en otra, la libera.
+    Object.keys(next).forEach((sId) => {
+      if (next[sId] === playerId) delete next[sId];
+    });
+    next[slotId] = playerId;
+    saveAssignments(next);
+  }
+
+  function clearSlot(slotId) {
+    const next = { ...assignments };
+    delete next[slotId];
+    saveAssignments(next);
+  }
+
+  function handleSlotClick(slot) {
+    if (selectedPlayerId) {
+      assignSlot(slot.id, selectedPlayerId);
+      setSelectedPlayerId(null);
+      setSelectedSlotId(null);
+      return;
+    }
+    setSelectedSlotId((prev) => (prev === slot.id ? null : slot.id));
+  }
+
+  function handlePlayerClick(id) {
+    if (selectedSlotId) {
+      assignSlot(selectedSlotId, id);
+      setSelectedSlotId(null);
+      setSelectedPlayerId(null);
+      return;
+    }
+    setSelectedPlayerId((prev) => (prev === id ? null : id));
+  }
+
+  return (
+    <div>
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Partido</div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {eligibleMatches.map((m) => (
+          <button
+            key={m.id}
+            onClick={() => {
+              setMatchId(m.id);
+              setSelectedPlayerId(null);
+              setSelectedSlotId(null);
+            }}
+            className="mp-btn px-3 py-2 text-sm"
+            style={match.id === m.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            vs {m.opponent} · {m.date}
+          </button>
+        ))}
       </div>
 
-      {selectedId && (placedIds.includes(selectedId) || (selectedId === "ball" && positions.ball)) && (
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        {selectedPlayerId
+          ? `Toca una posición para colocar a ${playerById(selectedPlayerId).name}`
+          : selectedSlotId
+          ? "Toca un titular para colocarlo aquí, o quítalo con el botón de abajo"
+          : "Toca un titular y luego una posición para colocarlo, o toca directamente una posición"}
+      </div>
+
+      <MiniPitch>
+        {slots.map((slot, i) => {
+          const occupantId = assignments[slot.id];
+          const occupant = occupantId ? playerById(occupantId) : null;
+          const isSelected = selectedSlotId === slot.id;
+          return (
+            <button
+              key={slot.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleSlotClick(slot);
+              }}
+              className={`mp-shirt w-10 h-10 text-sm font-semibold ${isSelected ? "selected" : ""}`}
+              style={{
+                position: "absolute",
+                left: `${slot.x}%`,
+                top: `${slot.y}%`,
+                transform: "translate(-50%, -50%)",
+                borderStyle: occupant ? "solid" : "dashed",
+                opacity: occupant ? 1 : 0.65,
+              }}
+            >
+              {occupant ? occupant.number : i + 1}
+            </button>
+          );
+        })}
+
+        {ball && (
+          <div
+            className="mp-shirt w-8 h-8 text-base"
+            style={{
+              position: "absolute",
+              left: `${ball.x}%`,
+              top: `${ball.y}%`,
+              transform: "translate(-50%, -50%)",
+              background: "#F4F1E8",
+            }}
+          >
+            ⚽
+          </div>
+        )}
+      </MiniPitch>
+
+      {selectedSlotId && assignments[selectedSlotId] && (
         <button
           onClick={() => {
-            clearPosition(selectedId);
-            setSelectedId(null);
+            clearSlot(selectedSlotId);
+            setSelectedSlotId(null);
           }}
           className="mp-btn mp-btn-outline w-full py-2 text-xs mb-3"
           style={{ color: "var(--crimson)" }}
         >
-          Quitar {selectedId === "ball" ? "el balón" : playerById(selectedId).name} del campo
+          Quitar a {playerById(assignments[selectedSlotId]).name} de esta posición
         </button>
       )}
 
-      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
-        Balón — indica desde dónde se saca
-      </div>
-      <div className="flex flex-wrap gap-2 mb-4">
-        {positions.ball ? (
-          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-            El balón ya está colocado en el campo.
-          </span>
-        ) : (
-          <div className="flex flex-col items-center gap-1" style={{ width: 56 }}>
-            <button
-              onClick={() => handleSelect("ball")}
-              className={`mp-shirt w-10 h-10 text-lg ${selectedId === "ball" ? "selected" : ""}`}
-              style={{ background: selectedId === "ball" ? undefined : "#F4F1E8" }}
-            >
-              ⚽
-            </button>
-            <span className="text-[10px] text-center leading-tight" style={{ color: "var(--chalk-dim)" }}>
-              Balón
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Jugadores</div>
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Titulares sin colocar</div>
       <div className="flex flex-wrap gap-2">
-        {unplacedIds.length === 0 && (
+        {unassigned.length === 0 && (
           <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-            Todos los jugadores están colocados en el campo.
+            Todos los titulares de este partido están colocados.
           </span>
         )}
-        {unplacedIds.map((id) => {
-          const p = playerById(id);
-          const selected = selectedId === id;
+        {unassigned.map((p) => {
+          const selected = selectedPlayerId === p.id;
           return (
-            <div key={id} className="flex flex-col items-center gap-1" style={{ width: 56 }}>
+            <div key={p.id} className="flex flex-col items-center gap-1" style={{ width: 56 }}>
               <button
-                onClick={() => handleSelect(id)}
+                onClick={() => handlePlayerClick(p.id)}
                 className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
               >
                 {p.number}
@@ -4033,15 +4246,17 @@ const SET_PIECE_TYPES = [
    Jugadas de una categoría de balón parado (p.ej. córners a favor):
    varias jugadas con nombre propio, cada una con su propio medio campo
 --------------------------------------------------------- */
-function SetPieceCategoryEditor({ plays, squad, onSave }) {
+function SetPieceCategoryEditor({ plays, squad, matches, category, onSave, onAssign }) {
   const [activePlayId, setActivePlayId] = useState(plays[0] ? plays[0].id : null);
+  const [mode, setMode] = useState("asignar"); // "asignar" | "formacion"
 
   const activePlay = plays.find((pl) => pl.id === activePlayId) || null;
 
   function addPlay() {
-    const newPlay = { id: genId(), name: `Jugada ${plays.length + 1}`, positions: {} };
+    const newPlay = { id: genId(), name: `Jugada ${plays.length + 1}`, slots: [], ball: null };
     onSave([...plays, newPlay]);
     setActivePlayId(newPlay.id);
+    setMode("formacion");
   }
 
   function renamePlay(id, name) {
@@ -4055,8 +4270,8 @@ function SetPieceCategoryEditor({ plays, squad, onSave }) {
     setActivePlayId(updated[0] ? updated[0].id : null);
   }
 
-  function savePositions(id, positions) {
-    onSave(plays.map((pl) => (pl.id === id ? { ...pl, positions } : pl)));
+  function saveFormation(id, next) {
+    onSave(plays.map((pl) => (pl.id === id ? { ...pl, slots: next.slots, ball: next.ball } : pl)));
   }
 
   return (
@@ -4079,7 +4294,7 @@ function SetPieceCategoryEditor({ plays, squad, onSave }) {
 
       {!activePlay ? (
         <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-          Añade una jugada para empezar a colocar a los jugadores.
+          Añade una jugada para empezar a definir sus posiciones fijas.
         </div>
       ) : (
         <React.Fragment>
@@ -4101,19 +4316,49 @@ function SetPieceCategoryEditor({ plays, squad, onSave }) {
             </button>
           </div>
 
-          <SetPieceBoard
-            key={activePlay.id}
-            positions={activePlay.positions || {}}
-            squad={squad}
-            onSave={(positions) => savePositions(activePlay.id, positions)}
-          />
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => setMode("asignar")}
+              className="mp-btn px-3 py-2 text-sm flex-1"
+              style={mode === "asignar" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+            >
+              Asignar jugadores
+            </button>
+            <button
+              onClick={() => setMode("formacion")}
+              className="mp-btn px-3 py-2 text-sm flex-1"
+              style={mode === "formacion" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+            >
+              Formación
+            </button>
+          </div>
+
+          {mode === "formacion" ? (
+            <SetPieceFormationEditor
+              key={activePlay.id}
+              slots={activePlay.slots || []}
+              ball={activePlay.ball || null}
+              onSave={(next) => saveFormation(activePlay.id, next)}
+            />
+          ) : (
+            <SetPieceAssignmentBoard
+              key={activePlay.id}
+              slots={activePlay.slots || []}
+              ball={activePlay.ball || null}
+              squad={squad}
+              matches={matches}
+              category={category}
+              playId={activePlay.id}
+              onAssign={onAssign}
+            />
+          )}
         </React.Fragment>
       )}
     </div>
   );
 }
 
-function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositions, onBack }) {
+function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositions, onSaveAssignment, onBack }) {
   const [mainTab, setMainTab] = useState("estadisticas");
   const [spSide, setSpSide] = useState("favor");
   const [spType, setSpType] = useState("corner");
@@ -4241,7 +4486,10 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
             key={spCategory}
             plays={Array.isArray(setPiecePositions[spCategory]) ? setPiecePositions[spCategory] : []}
             squad={squad}
+            matches={matches}
+            category={spCategory}
             onSave={(plays) => onSaveSetPiecePositions(spCategory, plays)}
+            onAssign={onSaveAssignment}
           />
         </React.Fragment>
       )}
@@ -4796,7 +5044,12 @@ function App() {
   }
 
   function applyRemoteData(remoteData, remoteUpdatedAt) {
-    const merged = { ...emptyData(), ...remoteData, updatedAt: remoteUpdatedAt };
+    const merged = {
+      ...emptyData(),
+      ...remoteData,
+      setPiecePositions: migrateSetPiecePositions(remoteData.setPiecePositions || {}),
+      updatedAt: remoteUpdatedAt,
+    };
     setData(merged);
     dataRef.current = merged;
     saveLocalData(merged);
@@ -4916,6 +5169,25 @@ function App() {
     });
   }
 
+  // Qué jugador titular de `matchId` ocupa cada posición fija (slot) de una jugada concreta.
+  // Vive en el propio partido (no en la jugada) porque el once cambia de partido a partido.
+  function saveSetPieceAssignment(matchId, category, playId, slotAssignments) {
+    const current = dataRef.current.matchesById[matchId];
+    if (!current) return;
+    const updated = {
+      ...current,
+      setPieceAssignments: {
+        ...(current.setPieceAssignments || {}),
+        [category]: {
+          ...((current.setPieceAssignments || {})[category] || {}),
+          [playId]: slotAssignments,
+        },
+      },
+    };
+    commit({ ...dataRef.current, matchesById: { ...dataRef.current.matchesById, [matchId]: updated } });
+    if (matchRef.current && matchRef.current.id === matchId) setMatch(updated);
+  }
+
   // kind: "own" (nuestro escudo) o "rival" (el del equipo `name`)
   async function saveCrest(kind, name, dataUrl) {
     dataUrl = await removeWhiteBackground(dataUrl);
@@ -5031,6 +5303,7 @@ function App() {
       teamEvents: [],
       opponentChances: [],
       positions: {},
+      setPieceAssignments: {},
     };
     const updatedList = [
       ...dataRef.current.matchesList,
@@ -5116,6 +5389,7 @@ function App() {
           teamEvents: [],
           opponentChances: [],
           positions: {},
+          setPieceAssignments: {},
         }));
 
         const updatedList = [
@@ -5288,6 +5562,7 @@ function App() {
           squad={data.squad}
           setPiecePositions={data.setPiecePositions || {}}
           onSaveSetPiecePositions={saveSetPiecePositions}
+          onSaveAssignment={saveSetPieceAssignment}
           onBack={goHome}
         />
       )}
