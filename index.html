@@ -1310,6 +1310,9 @@ function SquadManager({ squad, onSave, onBack }) {
   const [players, setPlayers] = useState(squad);
   const [number, setNumber] = useState("");
   const [name, setName] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editNumber, setEditNumber] = useState("");
+  const [editName, setEditName] = useState("");
 
   useEffect(() => setPlayers(squad), [squad]);
 
@@ -1329,6 +1332,26 @@ function SquadManager({ squad, onSave, onBack }) {
     const updated = players.filter((p) => p.id !== id);
     setPlayers(updated);
     onSave(updated);
+  }
+
+  function startEdit(p) {
+    setEditingId(p.id);
+    setEditNumber(String(p.number));
+    setEditName(p.name);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  function saveEdit() {
+    if (!editName.trim()) return;
+    const updated = players.map((p) =>
+      p.id === editingId ? { ...p, number: editNumber.trim() || "-", name: editName.trim() } : p
+    );
+    setPlayers(updated);
+    onSave(updated);
+    setEditingId(null);
   }
 
   return (
@@ -1365,21 +1388,56 @@ function SquadManager({ squad, onSave, onBack }) {
         {players
           .slice()
           .sort((a, b) => Number(a.number) - Number(b.number))
-          .map((p) => (
-            <div key={p.id} className="mp-card p-3 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="mp-shirt w-9 h-9 text-sm font-semibold">{p.number}</div>
-                <span>{p.name}</span>
+          .map((p) =>
+            editingId === p.id ? (
+              <div key={p.id} className="mp-card p-3 flex items-center gap-2">
+                <input
+                  value={editNumber}
+                  onChange={(e) => setEditNumber(e.target.value)}
+                  placeholder="Dorsal"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  className="mp-input px-3 py-2 w-20 text-center"
+                />
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="Nombre del jugador"
+                  className="mp-input px-3 py-2 flex-1"
+                  onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+                />
+                <button onClick={saveEdit} className="mp-btn mp-btn-primary px-3 py-2 text-sm font-semibold">
+                  Guardar
+                </button>
+                <button onClick={cancelEdit} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+                  Cancelar
+                </button>
               </div>
-              <button
-                onClick={() => removePlayer(p.id)}
-                className="text-sm"
-                style={{ color: "var(--crimson)" }}
-              >
-                Quitar
-              </button>
-            </div>
-          ))}
+            ) : (
+              <div key={p.id} className="mp-card p-3 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="mp-shirt w-9 h-9 text-sm font-semibold">{p.number}</div>
+                  <span>{p.name}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => startEdit(p)}
+                    className="text-sm"
+                    style={{ color: "var(--cielo)" }}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    onClick={() => removePlayer(p.id)}
+                    className="text-sm"
+                    style={{ color: "var(--crimson)" }}
+                  >
+                    Quitar
+                  </button>
+                </div>
+              </div>
+            )
+          )}
         {players.length === 0 && (
           <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>
             Añade jugadores para poder convocarlos en un partido.
@@ -2955,13 +3013,14 @@ function MatchTotals({ events, teamEvents = [] }) {
    Estadísticas del equipo de toda la temporada, en medias por partido
 --------------------------------------------------------- */
 function SeasonTeamStats({ matches }) {
-  const n = matches.length;
+  const played = matches.filter((m) => !m.scheduled);
+  const n = played.length;
   if (n === 0) return null;
 
-  const allEvents = matches.flatMap((m) => m.events);
+  const allEvents = played.flatMap((m) => m.events);
   const count = (type) => allEvents.filter((e) => e.type === type).length;
   const teamEventCount = (type) =>
-    matches.reduce((sum, m) => sum + (m.teamEvents || []).filter((e) => e.type === type).length, 0);
+    played.reduce((sum, m) => sum + (m.teamEvents || []).filter((e) => e.type === type).length, 0);
 
   const faltas = count("falta_cometida");
   const amarillas = count("amarilla");
@@ -2971,7 +3030,7 @@ function SeasonTeamStats({ matches }) {
   const corners = teamEventCount("corner_favor");
   const robos = count("recuperacion");
   const golesFavor = allEvents.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
-  const golesContra = matches.reduce(
+  const golesContra = played.reduce(
     (sum, m) => sum + (m.concededSetPieces || []).length + m.events.filter((e) => e.type === "gol_encajado").length,
     0
   );
@@ -3063,7 +3122,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
           const s = computePlayerStats(p.id, events);
           const isGoalkeeper = GOALKEEPER_NUMBERS.includes(String(p.number));
           const matchesPlayed = matches
-            ? matches.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length
+            ? matches.filter((m) => !m.scheduled && (m.onPitch.includes(p.id) || m.bench.includes(p.id))).length
             : 0;
           const perMatch = (total) =>
             matches && matchesPlayed > 0 ? ` (${(total / matchesPlayed).toFixed(1)}/partido)` : "";
@@ -3431,7 +3490,7 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
 function PlayerStatsCharts({ players, events, matches }) {
   const withStats = players.map((p) => {
     const matchesPlayed = matches
-      ? matches.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length
+      ? matches.filter((m) => !m.scheduled && (m.onPitch.includes(p.id) || m.bench.includes(p.id))).length
       : 0;
     return { p, s: computePlayerStats(p.id, events), matchesPlayed };
   });
