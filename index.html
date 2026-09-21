@@ -3761,7 +3761,7 @@ function cornerConcededCount(match) {
 /* ---------------------------------------------------------
    Medio campo: marcas del terreno de juego, reutilizadas tanto por el
    editor de formación (posiciones fijas) como por el de asignación
-   (qué titular ocupa cada posición fija en un partido concreto)
+   (qué jugador ocupa cada posición fija en un partido concreto)
 --------------------------------------------------------- */
 function MiniPitchMarkings() {
   return (
@@ -3899,7 +3899,7 @@ function clampPitchCoord(v, min, max) {
 
 /* ---------------------------------------------------------
    Formación de una jugada de balón parado: define posiciones fijas
-   en el campo (independientes del jugador). Qué titular ocupa cada
+   en el campo (independientes del jugador). Qué jugador ocupa cada
    una se decide después, partido a partido, en SetPieceAssignmentBoard.
 --------------------------------------------------------- */
 function SetPieceFormationEditor({ slots, ball, onSave }) {
@@ -3959,7 +3959,7 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
       </div>
 
       <MiniPitch pitchRef={pitchRef} onClick={handlePitchClick}>
-        {slots.map((slot, i) => {
+        {slots.map((slot) => {
           const isSelected = selected && selected.type === "slot" && selected.id === slot.id;
           return (
             <button
@@ -3968,16 +3968,14 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
                 e.stopPropagation();
                 setSelected(isSelected ? null : { type: "slot", id: slot.id });
               }}
-              className={`mp-shirt w-10 h-10 text-sm font-semibold ${isSelected ? "selected" : ""}`}
+              className={`mp-shirt w-10 h-10 ${isSelected ? "selected" : ""}`}
               style={{
                 position: "absolute",
                 left: `${slot.x}%`,
                 top: `${slot.y}%`,
                 transform: "translate(-50%, -50%)",
               }}
-            >
-              {i + 1}
-            </button>
+            />
           );
         })}
 
@@ -4032,7 +4030,7 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
       </div>
       <div className="text-xs mt-2" style={{ color: "var(--chalk-dim)" }}>
         {slots.length} posición{slots.length === 1 ? "" : "es"} fija{slots.length === 1 ? "" : "s"}. Luego, en
-        "Asignar jugadores", eliges qué titular ocupa cada una en cada partido.
+        "Asignar jugadores", eliges qué jugador ocupa cada una en cada partido.
       </div>
     </div>
   );
@@ -4040,19 +4038,18 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
 
 /* ---------------------------------------------------------
    Asignación de una jugada de balón parado: para un partido concreto,
-   qué titular de ese once ocupa cada posición fija ya definida.
+   qué jugador de la plantilla ocupa cada posición fija ya definida.
 --------------------------------------------------------- */
 function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId, onAssign }) {
-  const eligibleMatches = matches
-    .filter((m) => m.onPitch && m.onPitch.length > 0)
+  const sortedMatches = matches
     .slice()
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 
-  const [matchId, setMatchId] = useState(eligibleMatches[0] ? eligibleMatches[0].id : null);
+  const [matchId, setMatchId] = useState(sortedMatches[0] ? sortedMatches[0].id : null);
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [selectedSlotId, setSelectedSlotId] = useState(null);
 
-  const match = eligibleMatches.find((m) => m.id === matchId) || eligibleMatches[0] || null;
+  const match = sortedMatches.find((m) => m.id === matchId) || sortedMatches[0] || null;
 
   function playerById(id) {
     return squad.find((p) => p.id === id) || { id, number: "?", name: "Desconocido" };
@@ -4069,7 +4066,7 @@ function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId
   if (!match) {
     return (
       <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-        Todavía no hay ningún partido con el once inicial elegido.
+        Todavía no hay ningún partido registrado.
       </div>
     );
   }
@@ -4078,8 +4075,7 @@ function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId
     (match.setPieceAssignments && match.setPieceAssignments[category] && match.setPieceAssignments[category][playId]) ||
     {};
   const assignedPlayerIds = new Set(Object.values(assignments));
-  const roster = match.onPitch.filter((id) => squad.some((sp) => sp.id === id)).map(playerById);
-  const unassigned = roster.filter((p) => !assignedPlayerIds.has(p.id));
+  const unassigned = squad.filter((p) => !assignedPlayerIds.has(p.id));
 
   function saveAssignments(next) {
     onAssign(match.id, category, playId, next);
@@ -4125,7 +4121,7 @@ function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId
     <div>
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Partido</div>
       <div className="flex flex-wrap gap-2 mb-3">
-        {eligibleMatches.map((m) => (
+        {sortedMatches.map((m) => (
           <button
             key={m.id}
             onClick={() => {
@@ -4145,12 +4141,12 @@ function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId
         {selectedPlayerId
           ? `Toca una posición para colocar a ${playerById(selectedPlayerId).name}`
           : selectedSlotId
-          ? "Toca un titular para colocarlo aquí, o quítalo con el botón de abajo"
-          : "Toca un titular y luego una posición para colocarlo, o toca directamente una posición"}
+          ? "Toca un jugador para colocarlo aquí, o quítalo con el botón de abajo"
+          : "Toca un jugador y luego una posición para colocarlo, o toca directamente una posición"}
       </div>
 
       <MiniPitch>
-        {slots.map((slot, i) => {
+        {slots.map((slot) => {
           const occupantId = assignments[slot.id];
           const occupant = occupantId ? playerById(occupantId) : null;
           const isSelected = selectedSlotId === slot.id;
@@ -4171,7 +4167,7 @@ function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId
                 opacity: occupant ? 1 : 0.65,
               }}
             >
-              {occupant ? occupant.number : i + 1}
+              {occupant && occupant.number}
             </button>
           );
         })}
@@ -4205,11 +4201,11 @@ function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId
         </button>
       )}
 
-      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Titulares sin colocar</div>
+      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Jugadores sin colocar</div>
       <div className="flex flex-wrap gap-2">
         {unassigned.length === 0 && (
           <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-            Todos los titulares de este partido están colocados.
+            Todos los jugadores de la plantilla están colocados.
           </span>
         )}
         {unassigned.map((p) => {
@@ -5171,8 +5167,8 @@ function App() {
     });
   }
 
-  // Qué jugador titular de `matchId` ocupa cada posición fija (slot) de una jugada concreta.
-  // Vive en el propio partido (no en la jugada) porque el once cambia de partido a partido.
+  // Qué jugador de la plantilla ocupa cada posición fija (slot) de una jugada, en `matchId`.
+  // Vive en el propio partido (no en la jugada) porque puede variar de partido a partido.
   function saveSetPieceAssignment(matchId, category, playId, slotAssignments) {
     const current = dataRef.current.matchesById[matchId];
     if (!current) return;
