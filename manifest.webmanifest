@@ -1,6 +1,6 @@
 {
-  "name": "Cuaderno de partido",
-  "short_name": "Cuaderno",
+  "name": "Statix",
+  "short_name": "Statix",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#16241C",
