@@ -3598,19 +3598,32 @@ function computeMatchMinutes(match) {
 
 // Destacados de la temporada para el resumen rápido de Inicio: máximo goleador, más
 // asistencias y más minutos jugados. Devuelve null en cada uno si todavía no hay datos.
+// Minutos jugados por cada jugador sumados en toda la temporada (solo partidos ya jugados,
+// no los programados): titular desde el minuto 0, o desde que entra de suplente, hasta que le
+// sustituyen o acaba el partido. Lo reutilizan el resumen rápido de Inicio y las estadísticas
+// por jugador (temporada y gráficos).
+function computeSeasonMinutesByPlayer(matches) {
+  const minutesBy = {};
+  matches
+    .filter((m) => !m.scheduled)
+    .forEach((m) => {
+      const mins = computeMatchMinutes(m);
+      Object.keys(mins).forEach((id) => { minutesBy[id] = (minutesBy[id] || 0) + mins[id]; });
+    });
+  return minutesBy;
+}
+
 function computeSeasonHighlights(matches, squad) {
   const played = matches.filter((m) => !m.scheduled);
   const goalsBy = {};
   const assistsBy = {};
-  const minutesBy = {};
   played.forEach((m) => {
     (m.events || []).forEach((e) => {
       if (ALL_GOAL_TYPES.includes(e.type)) goalsBy[e.playerId] = (goalsBy[e.playerId] || 0) + 1;
       if (e.type === "asistencia") assistsBy[e.playerId] = (assistsBy[e.playerId] || 0) + 1;
     });
-    const mins = computeMatchMinutes(m);
-    Object.keys(mins).forEach((id) => { minutesBy[id] = (minutesBy[id] || 0) + mins[id]; });
   });
+  const minutesBy = computeSeasonMinutesByPlayer(matches);
   const nameFor = (id) => { const p = squad.find((pp) => pp.id === id); return p ? p.name : null; };
   const topBy = (map) => {
     const entries = Object.entries(map).filter(([, v]) => v > 0);
@@ -3693,6 +3706,8 @@ function PlayerStatsAccordion({ players, events, matches }) {
     );
   }
 
+  const seasonMinutesByPlayer = matches ? computeSeasonMinutesByPlayer(matches) : {};
+
   return (
     <div className="flex flex-col gap-2">
       {players
@@ -3705,6 +3720,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
           const matchesPlayed = matches
             ? matches.filter((m) => !m.scheduled && (m.onPitch.includes(p.id) || m.bench.includes(p.id))).length
             : 0;
+          const seasonMinutes = seasonMinutesByPlayer[p.id] || 0;
           const perMatch = (total) =>
             matches && matchesPlayed > 0 ? ` (${(total / matchesPlayed).toFixed(1)}/partido)` : "";
           return (
@@ -3721,6 +3737,12 @@ function PlayerStatsAccordion({ players, events, matches }) {
               </button>
               {open && !isGoalkeeper && (
                 <div className="px-3 pb-3 flex flex-col gap-2">
+                  {matches && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Minutos jugados (temporada)</span>
+                      <span className="text-sm font-semibold">{seasonMinutes}'</span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Duelos ganados</span>
                     <span className="text-sm font-semibold">
@@ -3776,6 +3798,12 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   className="px-3 pb-3 pt-2 flex flex-col gap-2"
                   style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}
                 >
+                  {matches && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Minutos jugados (temporada)</span>
+                      <span className="text-sm font-semibold">{seasonMinutes}'</span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Paradas</span>
                     <span className="text-sm font-semibold">
@@ -4087,11 +4115,17 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
 }
 
 function PlayerStatsCharts({ players, events, matches }) {
+  const seasonMinutesByPlayer = matches ? computeSeasonMinutesByPlayer(matches) : {};
   const withStats = players.map((p) => {
     const matchesPlayed = matches
       ? matches.filter((m) => !m.scheduled && (m.onPitch.includes(p.id) || m.bench.includes(p.id))).length
       : 0;
-    return { p, s: computePlayerStats(p.id, events), matchesPlayed };
+    return {
+      p,
+      s: computePlayerStats(p.id, events),
+      matchesPlayed,
+      seasonMinutes: seasonMinutesByPlayer[p.id] || 0,
+    };
   });
 
   function rowsFor(pick, format) {
@@ -4138,7 +4172,15 @@ function PlayerStatsCharts({ players, events, matches }) {
       .sort((a, b) => b.raw - a.raw);
   }
 
+  const minutesRows = matches
+    ? withStats
+        .map(({ p, seasonMinutes }) => ({ label: p.name, raw: seasonMinutes, display: `${seasonMinutes}'` }))
+        .filter((r) => r.raw > 0)
+        .sort((a, b) => b.raw - a.raw)
+    : [];
+
   const charts = [
+    { title: "Minutos jugados (temporada)", color: "var(--amber)", rows: minutesRows },
     { title: "Goles", color: "var(--turf)", rows: rowsFor((s) => s.goles) },
     { title: "Asistencias", color: "var(--turf)", rows: rowsFor((s) => s.asistencias) },
     {
