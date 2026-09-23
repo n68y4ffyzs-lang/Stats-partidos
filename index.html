@@ -2073,6 +2073,7 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
   const [subOutId, setSubOutId] = useState(null);
   const [tab, setTab] = useState("jugadores");
   const [showPlayerStats, setShowPlayerStats] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [pendingDetail, setPendingDetail] = useState(null);
   const [, forceTick] = useState(0);
 
@@ -2518,19 +2519,19 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
               ? `Evento para ${playerById(selectedPlayerId).name}${isGoalkeeperSelected ? " (portero)" : ""}`
               : "Selecciona un jugador para registrar un evento"}
           </div>
-          <div className="mb-5 flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
             {liveEventSections.map((section) => (
               <div key={section.title}>
-                <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: "var(--chalk-dim)" }}>
+                <div className="text-xs uppercase tracking-wide mb-1.5 font-semibold" style={{ color: "var(--chalk-dim)" }}>
                   {section.title}
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 gap-2">
                   {section.events.map((ev) => (
                     <button
                       key={ev.id}
                       disabled={!selectedPlayerId}
                       onClick={() => addEvent(ev.id)}
-                      className={`mp-card ${eventChipCls(ev.id)} px-2 py-2 text-xs text-left disabled:opacity-30`}
+                      className={`mp-card ${eventChipCls(ev.id)} px-4 py-5 text-base font-semibold text-left disabled:opacity-30`}
                     >
                       {ev.label}
                     </button>
@@ -2539,38 +2540,6 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
               </div>
             ))}
           </div>
-
-          {/* Cronología */}
-          <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Cronología</div>
-          <div className="flex flex-col gap-2 lg:max-h-[45vh] lg:overflow-y-auto lg:pr-1">
-            {timeline.length === 0 && (
-              <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>Aún no hay eventos registrados.</div>
-            )}
-            {timeline.map((t) =>
-              t.kind === "event" ? (
-                <div key={t.id} className={`mp-card ${eventChipCls(t.type)} p-2.5 flex items-center justify-between`}>
-                  <span className="text-sm">
-                    <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
-                    #{t.playerNumber} {t.playerName} — {EVENT_LABEL[t.type]}
-                    {eventDetailLabel(t) && ` (${eventDetailLabel(t)})`}
-                  </span>
-                  <button onClick={() => removeEvent(t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
-                    Deshacer
-                  </button>
-                </div>
-              ) : (
-                <div key={t.id} className="mp-card chip-cielo p-2.5 flex items-center justify-between">
-                  <span className="text-sm">
-                    <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
-                    Cambio: sale #{t.outNumber} {t.outName}, entra #{t.inNumber} {t.inName}
-                  </span>
-                  <button onClick={() => removeSub(t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
-                    Deshacer
-                  </button>
-                </div>
-              )
-            )}
-          </div>
         </div>
 
         <div className="mt-4 lg:mt-0">
@@ -2578,6 +2547,49 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
           <TeamEventsPanel match={match} onUpdate={onUpdate} />
         </div>
       </div>
+      )}
+
+      {/* Cronología: colapsada por defecto para no robarle espacio a los botones de evento */}
+      {tab === "jugadores" && (
+        <div className="mt-4">
+          <button
+            onClick={() => setShowTimeline((v) => !v)}
+            className="mp-btn mp-btn-outline w-full py-2.5 text-sm"
+          >
+            {showTimeline ? "Ocultar cronología" : `Ver cronología (${timeline.length})`}
+          </button>
+          {showTimeline && (
+            <div className="flex flex-col gap-2 mt-2">
+              {timeline.length === 0 && (
+                <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>Aún no hay eventos registrados.</div>
+              )}
+              {timeline.map((t) =>
+                t.kind === "event" ? (
+                  <div key={t.id} className={`mp-card ${eventChipCls(t.type)} p-2.5 flex items-center justify-between`}>
+                    <span className="text-sm">
+                      <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
+                      #{t.playerNumber} {t.playerName} — {EVENT_LABEL[t.type]}
+                      {eventDetailLabel(t) && ` (${eventDetailLabel(t)})`}
+                    </span>
+                    <button onClick={() => removeEvent(t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
+                      Deshacer
+                    </button>
+                  </div>
+                ) : (
+                  <div key={t.id} className="mp-card chip-cielo p-2.5 flex items-center justify-between">
+                    <span className="text-sm">
+                      <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
+                      Cambio: sale #{t.outNumber} {t.outName}, entra #{t.inNumber} {t.inName}
+                    </span>
+                    <button onClick={() => removeSub(t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
+                      Deshacer
+                    </button>
+                  </div>
+                )
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
