@@ -2951,22 +2951,34 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
           const pos = positions[id];
           const selected = selectedId === id;
           return (
-            <button
+            <div
               key={id}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSelect(id);
-              }}
-              className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+              className="flex flex-col items-center"
               style={{
                 position: "absolute",
                 left: `${100 - pos.y}%`,
                 top: `${pos.x}%`,
                 transform: "translate(-50%, -50%)",
+                pointerEvents: "none",
               }}
             >
-              {p.number}
-            </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSelect(id);
+                }}
+                className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+                style={{ pointerEvents: "auto" }}
+              >
+                {p.number}
+              </button>
+              <span
+                className="text-[9px] font-semibold leading-none whitespace-nowrap px-1 rounded mt-0.5"
+                style={{ color: "var(--chalk)", background: "rgba(15,27,20,0.65)" }}
+              >
+                {p.name.split(" ")[0]}
+              </span>
+            </div>
           );
         })}
 
