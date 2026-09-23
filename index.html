@@ -174,6 +174,29 @@ function eventChipCls(typeId) {
   return ev.chipCls || GROUP_META[ev.group].cls;
 }
 
+// Agrupación puramente visual de los botones de evento en el registro en directo: no toca el
+// `group` de EVENT_TYPES (que sigue rigiendo colores y las demás pantallas), solo cómo se
+// organizan aquí para poder verlos todos de un vistazo, sin scroll, mientras el partido avanza.
+const LIVE_EVENT_SECTIONS = [
+  { title: "Ataque", ids: ["gol", "asistencia", "remate_puerta", "remate_fuera", "pase_clave", "regate"] },
+  {
+    title: "Defensa",
+    ids: [
+      "duelo_general_ganado",
+      "duelo_general_perdido",
+      "duelo_ganado",
+      "duelo_perdido",
+      "despeje",
+      "despeje_fallado",
+      "recuperacion",
+      "perdida",
+      "regate_fallado",
+    ],
+  },
+  { title: "Disciplina", ids: ["falta_cometida", "falta_recibida", "amarilla", "roja"] },
+  { title: "Portero", ids: ["parada_area", "parada_fuera_area", "parada_area_pequena", "gol_encajado"] },
+];
+
 /* ---------------------------------------------------------
    Utilidades
 --------------------------------------------------------- */
@@ -1250,21 +1273,14 @@ function MatchCalendar({ matches, crests, onOpenMatch }) {
   );
 }
 
-function Home({
+/* ---------------------------------------------------------
+   Pantalla: Partidos (pestaña "Partidos" de la barra inferior)
+--------------------------------------------------------- */
+function MatchesTab({
   matches,
   crests,
-  onSaveCrest,
-  onNewMatch,
   onOpenMatch,
   onDeleteMatch,
-  onGoSquad,
-  onGoSeason,
-  onGoSetPieces,
-  onGoCharts,
-  onGoPitch,
-  squadCount,
-  syncStatus,
-  onGoSync,
   onImportCalendar,
   calendarImport,
   onImportCrests,
@@ -1278,59 +1294,11 @@ function Home({
   );
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
-      <div className="flex items-center justify-between mb-3 pt-2">
-        <CrestPicker
-          src={crests && crests.own}
-          size={44}
-          onPick={(url) => onSaveCrest("own", null, url)}
-          label="Elegir el escudo de mi equipo"
-        />
-        <div className="flex-1 min-w-0 mx-3">
-          <h1 className="display text-3xl font-semibold leading-none">Statix</h1>
-          <p className="text-sm mt-1" style={{ color: "var(--chalk-dim)" }}>
-            {squadCount} jugador{squadCount === 1 ? "" : "es"} en la plantilla
-          </p>
-        </div>
-        <button onClick={onGoSquad} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
-          Plantilla
-        </button>
-      </div>
-
-      <div className="mb-6">
-        <SyncBadge status={syncStatus} onClick={onGoSync} />
-      </div>
-
-      <div style={{ width: "100vw", position: "relative", left: "50%", marginLeft: "-50vw", padding: "0 16px" }}>
-        <button
-          onClick={onNewMatch}
-          className="mp-btn mp-btn-primary w-full py-4 text-lg font-semibold mb-3 display"
-        >
-          Nuevo partido
-        </button>
-
-        <div className="grid grid-cols-4 gap-2 mb-6">
-          {[
-            { label: "Temporada", icon: "📊", color: "var(--cielo)", onClick: onGoSeason },
-            { label: "Balón parado", icon: "🎯", color: "var(--amber)", onClick: onGoSetPieces },
-            { label: "Campo", icon: "🏟️", color: "var(--violet)", onClick: onGoPitch },
-            { label: "Gráficos", icon: "📈", color: "var(--turf)", onClick: onGoCharts },
-          ].map((t) => (
-            <button key={t.label} onClick={t.onClick} className="mp-card mp-btn mp-tile py-3 px-1">
-              <span className="mp-tile-icon" style={{ background: "rgba(244,241,232,0.08)", border: `1px solid ${t.color}` }}>
-                {t.icon}
-              </span>
-              <span className="text-xs font-semibold">{t.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      <h1 className="display text-2xl font-semibold mb-4 pt-2">Partidos</h1>
 
       <LeagueStandings />
 
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm uppercase tracking-wide" style={{ color: "var(--chalk-dim)" }}>
-          Partidos
-        </h2>
+      <div className="flex items-center justify-end mb-2">
         <button
           onClick={onImportCalendar}
           disabled={calendarImport.loading}
@@ -1446,6 +1414,188 @@ function Home({
       ) : (
         filteredMatches.length > 0 && <MatchCalendar matches={filteredMatches} crests={crests} onOpenMatch={onOpenMatch} />
       )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Barra de navegación inferior fija
+--------------------------------------------------------- */
+const NAV_TABS = [
+  { id: "home", label: "Inicio", icon: "🏠" },
+  { id: "partidos", label: "Partidos", icon: "📅" },
+  { id: "squad", label: "Plantilla", icon: "👥" },
+  { id: "stats", label: "Stats", icon: "📊" },
+  { id: "sync", label: "Ajustes", icon: "⚙️" },
+];
+const TAB_VIEWS = NAV_TABS.map((t) => t.id);
+
+function BottomNav({ active, onNavigate }) {
+  return (
+    <nav
+      className="fixed bottom-0 left-0 right-0 flex"
+      style={{
+        background: "var(--ink)",
+        borderTop: "1px solid rgba(244,241,232,0.1)",
+        paddingBottom: "env(safe-area-inset-bottom)",
+        zIndex: 30,
+      }}
+    >
+      {NAV_TABS.map((t) => {
+        const isActive = active === t.id;
+        return (
+          <button
+            key={t.id}
+            onClick={() => onNavigate(t.id)}
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2"
+            style={{ color: isActive ? "var(--turf)" : "var(--chalk-dim)" }}
+          >
+            <span style={{ fontSize: 18, lineHeight: 1 }}>{t.icon}</span>
+            <span className="text-[10px] font-semibold">{t.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Inicio (pestaña "Inicio" de la barra inferior)
+--------------------------------------------------------- */
+function Home({ crests, onSaveCrest, syncStatus, onGoSync, onNewMatch, nextMatch, onOpenMatch, highlights }) {
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <div className="flex items-center justify-between mb-4 pt-2">
+        <CrestPicker
+          src={crests && crests.own}
+          size={44}
+          onPick={(url) => onSaveCrest("own", null, url)}
+          label="Elegir el escudo de mi equipo"
+        />
+        <h1 className="display text-3xl font-semibold leading-none flex-1 min-w-0 mx-3">Statix</h1>
+        <SyncBadge status={syncStatus} onClick={onGoSync} />
+      </div>
+
+      <div className="mp-card p-3 mb-4">
+        <div className="text-xs uppercase tracking-wide mb-3" style={{ color: "var(--chalk-dim)" }}>
+          Resumen de la temporada
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <div className="text-[10px] mb-1" style={{ color: "var(--chalk-dim)" }}>Máx. goleador</div>
+            {highlights.topScorer ? (
+              <React.Fragment>
+                <div className="text-sm font-semibold truncate">{highlights.topScorer.name}</div>
+                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                  {highlights.topScorer.value} gol{highlights.topScorer.value === 1 ? "" : "es"}
+                </div>
+              </React.Fragment>
+            ) : (
+              <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Sin datos aún</div>
+            )}
+          </div>
+          <div>
+            <div className="text-[10px] mb-1" style={{ color: "var(--chalk-dim)" }}>Más asistencias</div>
+            {highlights.topAssists ? (
+              <React.Fragment>
+                <div className="text-sm font-semibold truncate">{highlights.topAssists.name}</div>
+                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                  {highlights.topAssists.value} asist.
+                </div>
+              </React.Fragment>
+            ) : (
+              <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Sin datos aún</div>
+            )}
+          </div>
+          <div>
+            <div className="text-[10px] mb-1" style={{ color: "var(--chalk-dim)" }}>Más minutos</div>
+            {highlights.mostMinutes ? (
+              <React.Fragment>
+                <div className="text-sm font-semibold truncate">{highlights.mostMinutes.name}</div>
+                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{highlights.mostMinutes.value}'</div>
+              </React.Fragment>
+            ) : (
+              <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Sin datos aún</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={onNewMatch}
+        className="mp-btn mp-btn-primary w-full py-4 text-lg font-semibold mb-4 display"
+      >
+        Nuevo partido
+      </button>
+
+      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
+        Próximo partido
+      </div>
+      {nextMatch ? (
+        <button
+          onClick={() => onOpenMatch(nextMatch.id)}
+          className="mp-card p-3 w-full flex items-center justify-between gap-2 text-left"
+        >
+          <div className="min-w-0 flex items-center gap-2">
+            <MatchCrests match={nextMatch} crests={crests} size={32} />
+            <div className="min-w-0">
+              <div className="font-semibold truncate">vs {nextMatch.opponent}</div>
+              <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                {nextMatch.date}
+                {venueLabel(nextMatch) && (
+                  <span style={{ color: venueColor(nextMatch) }}> · {venueLabel(nextMatch)}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <span
+            className="text-xs px-2 py-1 rounded-full whitespace-nowrap shrink-0"
+            style={{ background: "rgba(62,146,204,0.18)", color: "var(--cielo)" }}
+          >
+            Programado
+          </span>
+        </button>
+      ) : (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          No hay ningún partido programado.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Pantalla: Stats (pestaña "Stats" de la barra inferior)
+--------------------------------------------------------- */
+function StatsHub({ onGoSeason, onGoSetPieces, onGoPitch, onGoCharts }) {
+  const tiles = [
+    { label: "Temporada", icon: "📊", color: "var(--cielo)", onClick: onGoSeason },
+    { label: "Balón parado", icon: "🎯", color: "var(--amber)", onClick: onGoSetPieces },
+    { label: "Campo", icon: "🏟️", color: "var(--violet)", onClick: onGoPitch },
+    { label: "Gráficos", icon: "📈", color: "var(--turf)", onClick: onGoCharts },
+  ];
+  return (
+    <div className="max-w-md mx-auto p-4 pb-10">
+      <h1 className="display text-2xl font-semibold mb-4 pt-2">Stats</h1>
+      <div className="grid grid-cols-2 gap-3">
+        {tiles.map((t) => (
+          <button key={t.label} onClick={t.onClick} className="mp-card mp-btn mp-tile py-6 px-2">
+            <span
+              className="mp-tile-icon"
+              style={{
+                width: 44,
+                height: 44,
+                fontSize: 20,
+                background: "rgba(244,241,232,0.08)",
+                border: `1px solid ${t.color}`,
+              }}
+            >
+              {t.icon}
+            </span>
+            <span className="text-sm font-semibold">{t.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2054,9 +2204,10 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
 
   const selectedPlayer = selectedPlayerId ? playerById(selectedPlayerId) : null;
   const isGoalkeeperSelected = !!selectedPlayer && GOALKEEPER_NUMBERS.includes(String(selectedPlayer.number));
-  const visibleEventTypes = EVENT_TYPES.filter(
-    (ev) => !ev.hidden && (ev.group !== "portero" || isGoalkeeperSelected)
-  );
+  const liveEventSections = LIVE_EVENT_SECTIONS.map((section) => ({
+    title: section.title,
+    events: section.ids.map((id) => EVENT_TYPES.find((ev) => ev.id === id)).filter(Boolean),
+  })).filter((section) => section.title !== "Portero" || isGoalkeeperSelected);
 
   const golesFavor = match.events.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
   const golesContra =
@@ -2293,22 +2444,31 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
             </div>
           )}
 
-          {/* Eventos */}
+          {/* Eventos, agrupados por categoría para verlos todos de un vistazo */}
           <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
             {selectedPlayerId
               ? `Evento para ${playerById(selectedPlayerId).name}${isGoalkeeperSelected ? " (portero)" : ""}`
               : "Selecciona un jugador para registrar un evento"}
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-5">
-            {visibleEventTypes.map((ev) => (
-              <button
-                key={ev.id}
-                disabled={!selectedPlayerId}
-                onClick={() => addEvent(ev.id)}
-                className={`mp-card ${eventChipCls(ev.id)} px-3 py-2.5 text-sm text-left disabled:opacity-30`}
-              >
-                {ev.label}
-              </button>
+          <div className="mb-5 flex flex-col gap-2">
+            {liveEventSections.map((section) => (
+              <div key={section.title}>
+                <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: "var(--chalk-dim)" }}>
+                  {section.title}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  {section.events.map((ev) => (
+                    <button
+                      key={ev.id}
+                      disabled={!selectedPlayerId}
+                      onClick={() => addEvent(ev.id)}
+                      className={`mp-card ${eventChipCls(ev.id)} px-2 py-2 text-xs text-left disabled:opacity-30`}
+                    >
+                      {ev.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
 
@@ -3217,6 +3377,70 @@ function SeasonTeamStats({ matches }) {
   );
 }
 
+// Minutos jugados por cada jugador en un partido concreto: reconstruye el once inicial
+// deshaciendo los cambios en orden inverso desde el `onPitch` final, y calcula cuánto
+// tiempo estuvo cada uno en el campo entre su entrada y su salida (o el final del partido).
+function computeMatchMinutes(match) {
+  const totalMinutes =
+    Math.round(((match.clock.half1Elapsed || 0) + (match.clock.half2Elapsed || 0)) / 60) ||
+    (match.halfLength || 0) * 2;
+  const subsSorted = [...(match.subs || [])].sort((a, b) => a.half - b.half || a.minute - b.minute);
+
+  const starters = new Set(match.onPitch || []);
+  [...subsSorted].reverse().forEach((s) => {
+    starters.delete(s.inId);
+    starters.add(s.outId);
+  });
+
+  const enterMinute = {};
+  const exitMinute = {};
+  starters.forEach((id) => { enterMinute[id] = 0; });
+  subsSorted.forEach((s) => {
+    exitMinute[s.outId] = s.minute;
+    enterMinute[s.inId] = s.minute;
+  });
+
+  const minutesByPlayer = {};
+  const participants = new Set([...starters, ...subsSorted.map((s) => s.inId)]);
+  participants.forEach((id) => {
+    const enter = enterMinute[id] != null ? enterMinute[id] : 0;
+    const exit = exitMinute[id] != null ? exitMinute[id] : totalMinutes;
+    minutesByPlayer[id] = Math.max(0, exit - enter);
+  });
+  return minutesByPlayer;
+}
+
+// Destacados de la temporada para el resumen rápido de Inicio: máximo goleador, más
+// asistencias y más minutos jugados. Devuelve null en cada uno si todavía no hay datos.
+function computeSeasonHighlights(matches, squad) {
+  const played = matches.filter((m) => !m.scheduled);
+  const goalsBy = {};
+  const assistsBy = {};
+  const minutesBy = {};
+  played.forEach((m) => {
+    (m.events || []).forEach((e) => {
+      if (ALL_GOAL_TYPES.includes(e.type)) goalsBy[e.playerId] = (goalsBy[e.playerId] || 0) + 1;
+      if (e.type === "asistencia") assistsBy[e.playerId] = (assistsBy[e.playerId] || 0) + 1;
+    });
+    const mins = computeMatchMinutes(m);
+    Object.keys(mins).forEach((id) => { minutesBy[id] = (minutesBy[id] || 0) + mins[id]; });
+  });
+  const nameFor = (id) => { const p = squad.find((pp) => pp.id === id); return p ? p.name : null; };
+  const topBy = (map) => {
+    const entries = Object.entries(map).filter(([, v]) => v > 0);
+    if (entries.length === 0) return null;
+    entries.sort((a, b) => b[1] - a[1]);
+    const [id, value] = entries[0];
+    const name = nameFor(id);
+    return name ? { name, value } : null;
+  };
+  return {
+    topScorer: topBy(goalsBy),
+    topAssists: topBy(assistsBy),
+    mostMinutes: topBy(minutesBy),
+  };
+}
+
 function computePlayerStats(playerId, events) {
   const own = events.filter((e) => e.playerId === playerId);
   const count = (type) => own.filter((e) => e.type === type).length;
@@ -3314,7 +3538,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Duelos ganados</span>
                     <span className="text-sm font-semibold">
-                      {s.duelosPct === null ? "–" : `${s.duelosPct}%`}
+                      {s.duelosPct === null ? "0%" : `${s.duelosPct}%`}
                       {s.duelosTotales > 0 && (
                         <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
                           ({s.duelosGanados} de {s.duelosTotales})
@@ -3325,7 +3549,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Regates acertados</span>
                     <span className="text-sm font-semibold">
-                      {s.regatesPct === null ? "–" : `${s.regatesPct}%`}
+                      {s.regatesPct === null ? "0%" : `${s.regatesPct}%`}
                       {s.regatesTotales > 0 && (
                         <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
                           ({s.regatesOk} de {s.regatesTotales})
@@ -3336,7 +3560,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Despejes</span>
                     <span className="text-sm font-semibold">
-                      {s.despejesPct === null ? "–" : `${s.despejesPct}%`}
+                      {s.despejesPct === null ? "0%" : `${s.despejesPct}%`}
                       {s.despejesTotales > 0 && (
                         <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
                           ({s.despejes} de {s.despejesTotales})
@@ -3347,7 +3571,7 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Tiros a puerta</span>
                     <span className="text-sm font-semibold">
-                      {s.tirosPuertaPct === null ? "–" : `${s.tirosPuertaPct}%`}
+                      {s.tirosPuertaPct === null ? "0%" : `${s.tirosPuertaPct}%`}
                       {s.tirosTotales > 0 && (
                         <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
                           ({s.tirosPuerta} de {s.tirosTotales})
@@ -5631,6 +5855,11 @@ function App() {
     setView("home");
   }
 
+  function goStats() {
+    setMatch(null);
+    setView("stats");
+  }
+
   function createMatch({ opponent, date, halfLength, titulares, isHome }) {
     const squad = dataRef.current.squad;
     const scheduled = date > todayISO();
@@ -5826,119 +6055,139 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  const isTabView = TAB_VIEWS.includes(view);
+  const nextScheduledMatch =
+    data.matchesList
+      .filter((m) => m.scheduled)
+      .sort((a, b) => (a.date > b.date ? 1 : -1))[0] || null;
+  const seasonHighlights = computeSeasonHighlights(Object.values(data.matchesById), data.squad);
+
   return (
     <div className="mp-app">
       <GlobalStyles />
-      {view === "home" && (
-        <Home
-          matches={data.matchesList}
-          crests={data.crests}
-          onSaveCrest={saveCrest}
-          squadCount={data.squad.length}
-          onNewMatch={() => setView("setup")}
-          onOpenMatch={openMatch}
-          onDeleteMatch={deleteMatch}
-          onGoSquad={() => setView("squad")}
-          onGoSeason={() => setView("season")}
-          onGoSetPieces={() => setView("setpieces")}
-          onGoCharts={() => setView("charts")}
-          onGoPitch={() => setView("pitch")}
-          syncStatus={syncStatus}
-          onGoSync={() => setView("sync")}
-          onImportCalendar={importFfcvCalendar}
-          calendarImport={calendarImport}
-          onImportCrests={importFfcvCrests}
-          crestImport={crestImport}
-        />
-      )}
-      {view === "squad" && (
-        <SquadManager squad={data.squad} onSave={saveSquad} onBack={goHome} />
-      )}
-      {view === "setup" && (
-        <MatchSetup
-          squad={data.squad}
-          crests={data.crests}
-          onSaveCrest={saveCrest}
-          onCreate={createMatch}
-          onBack={goHome}
-          onGoSquad={() => setView("squad")}
-        />
-      )}
-      {view === "scheduled" && match && (
-        <ScheduledMatch
-          match={match}
-          squad={data.squad}
-          crests={data.crests}
-          onSaveCrest={saveCrest}
-          onStart={beginScheduledMatch}
-          onDelete={() => deleteMatch(match.id, match.opponent)}
-          onBack={goHome}
-        />
-      )}
-      {view === "live" && match && (
-        <LiveMatch
-          match={match}
-          squad={data.squad}
-          crests={data.crests}
-          onSaveCrest={saveCrest}
-          onUpdate={updateMatch}
-          onFinish={finishMatch}
-          onBack={goHome}
-        />
-      )}
-      {view === "summary" && match && (
-        <MatchSummary match={match} squad={data.squad} crests={data.crests} onBack={goHome} onExport={exportCSV} />
-      )}
-      {view === "season" && (
-        <SeasonStats
-          matches={Object.values(data.matchesById)}
-          squad={data.squad}
-          onBack={goHome}
-          onGoCharts={() => setView("charts")}
-        />
-      )}
-      {view === "charts" && (
-        <PlayerChartsScreen
-          players={data.squad}
-          events={Object.values(data.matchesById).flatMap((m) => m.events)}
-          teamEvents={Object.values(data.matchesById).flatMap((m) => m.teamEvents || [])}
-          matches={Object.values(data.matchesById)}
-          onBack={() => setView("home")}
-        />
-      )}
-      {view === "setpieces" && (
-        <SetPieceStats
-          matches={Object.values(data.matchesById)}
-          squad={data.squad}
-          setPiecePositions={data.setPiecePositions || {}}
-          onSaveSetPiecePositions={saveSetPiecePositions}
-          onSaveAssignment={saveSetPieceAssignment}
-          onBack={goHome}
-        />
-      )}
-      {view === "pitch" && <PitchScreen squad={data.squad} crests={data.crests} onBack={goHome} />}
-      {view === "sync" && (
-        <SyncSettings
-          status={syncStatus}
-          teamCode={teamCode}
-          lastSyncedAt={lastSyncedAt}
-          supabaseUrl={supabaseConfig.url}
-          supabaseKey={supabaseConfig.key}
-          configured={configured}
-          onSaveTeamCode={saveTeamCode}
-          onSaveConfig={saveSupabaseConfig}
-          onSyncNow={pullFromSupabase}
-          onForcePush={forcePushToCloud}
-          onForcePull={forcePullFromCloud}
-          history={history}
-          historyLoading={historyLoading}
-          onLoadHistory={loadHistory}
-          onRestoreHistory={restoreFromHistory}
-          onExportJSON={exportJSON}
-          onImportJSON={importJSON}
-          onBack={goHome}
-        />
-      )}
+      <div style={isTabView ? { paddingBottom: 64 } : undefined}>
+        {view === "home" && (
+          <Home
+            crests={data.crests}
+            onSaveCrest={saveCrest}
+            syncStatus={syncStatus}
+            onGoSync={() => setView("sync")}
+            onNewMatch={() => setView("setup")}
+            nextMatch={nextScheduledMatch}
+            onOpenMatch={openMatch}
+            highlights={seasonHighlights}
+          />
+        )}
+        {view === "partidos" && (
+          <MatchesTab
+            matches={data.matchesList}
+            crests={data.crests}
+            onOpenMatch={openMatch}
+            onDeleteMatch={deleteMatch}
+            onImportCalendar={importFfcvCalendar}
+            calendarImport={calendarImport}
+            onImportCrests={importFfcvCrests}
+            crestImport={crestImport}
+          />
+        )}
+        {view === "squad" && (
+          <SquadManager squad={data.squad} onSave={saveSquad} onBack={goHome} />
+        )}
+        {view === "stats" && (
+          <StatsHub
+            onGoSeason={() => setView("season")}
+            onGoSetPieces={() => setView("setpieces")}
+            onGoCharts={() => setView("charts")}
+            onGoPitch={() => setView("pitch")}
+          />
+        )}
+        {view === "sync" && (
+          <SyncSettings
+            status={syncStatus}
+            teamCode={teamCode}
+            lastSyncedAt={lastSyncedAt}
+            supabaseUrl={supabaseConfig.url}
+            supabaseKey={supabaseConfig.key}
+            configured={configured}
+            onSaveTeamCode={saveTeamCode}
+            onSaveConfig={saveSupabaseConfig}
+            onSyncNow={pullFromSupabase}
+            onForcePush={forcePushToCloud}
+            onForcePull={forcePullFromCloud}
+            history={history}
+            historyLoading={historyLoading}
+            onLoadHistory={loadHistory}
+            onRestoreHistory={restoreFromHistory}
+            onExportJSON={exportJSON}
+            onImportJSON={importJSON}
+            onBack={goHome}
+          />
+        )}
+        {view === "setup" && (
+          <MatchSetup
+            squad={data.squad}
+            crests={data.crests}
+            onSaveCrest={saveCrest}
+            onCreate={createMatch}
+            onBack={goHome}
+            onGoSquad={() => setView("squad")}
+          />
+        )}
+        {view === "scheduled" && match && (
+          <ScheduledMatch
+            match={match}
+            squad={data.squad}
+            crests={data.crests}
+            onSaveCrest={saveCrest}
+            onStart={beginScheduledMatch}
+            onDelete={() => deleteMatch(match.id, match.opponent)}
+            onBack={goHome}
+          />
+        )}
+        {view === "live" && match && (
+          <LiveMatch
+            match={match}
+            squad={data.squad}
+            crests={data.crests}
+            onSaveCrest={saveCrest}
+            onUpdate={updateMatch}
+            onFinish={finishMatch}
+            onBack={goHome}
+          />
+        )}
+        {view === "summary" && match && (
+          <MatchSummary match={match} squad={data.squad} crests={data.crests} onBack={goHome} onExport={exportCSV} />
+        )}
+        {view === "season" && (
+          <SeasonStats
+            matches={Object.values(data.matchesById)}
+            squad={data.squad}
+            onBack={goStats}
+            onGoCharts={() => setView("charts")}
+          />
+        )}
+        {view === "charts" && (
+          <PlayerChartsScreen
+            players={data.squad}
+            events={Object.values(data.matchesById).flatMap((m) => m.events)}
+            teamEvents={Object.values(data.matchesById).flatMap((m) => m.teamEvents || [])}
+            matches={Object.values(data.matchesById)}
+            onBack={goStats}
+          />
+        )}
+        {view === "setpieces" && (
+          <SetPieceStats
+            matches={Object.values(data.matchesById)}
+            squad={data.squad}
+            setPiecePositions={data.setPiecePositions || {}}
+            onSaveSetPiecePositions={saveSetPiecePositions}
+            onSaveAssignment={saveSetPieceAssignment}
+            onBack={goStats}
+          />
+        )}
+        {view === "pitch" && <PitchScreen squad={data.squad} crests={data.crests} onBack={goStats} />}
+      </div>
+      {isTabView && <BottomNav active={view} onNavigate={setView} />}
     </div>
   );
 }
