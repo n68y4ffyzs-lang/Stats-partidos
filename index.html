@@ -1603,13 +1603,23 @@ function StatsHub({ onGoSeason, onGoSetPieces, onGoPitch, onGoCharts }) {
 /* ---------------------------------------------------------
    Pantalla: Plantilla
 --------------------------------------------------------- */
+const PLAYER_POSITIONS = [
+  { value: "portero", label: "Portero" },
+  { value: "defensa", label: "Defensa" },
+  { value: "centrocampista", label: "Centrocampista" },
+  { value: "delantero", label: "Delantero" },
+];
+const PLAYER_POSITION_LABEL = Object.fromEntries(PLAYER_POSITIONS.map((p) => [p.value, p.label]));
+
 function SquadManager({ squad, onSave, onBack }) {
   const [players, setPlayers] = useState(squad);
   const [number, setNumber] = useState("");
   const [name, setName] = useState("");
+  const [position, setPosition] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [editNumber, setEditNumber] = useState("");
   const [editName, setEditName] = useState("");
+  const [editPosition, setEditPosition] = useState("");
 
   useEffect(() => setPlayers(squad), [squad]);
 
@@ -1617,12 +1627,13 @@ function SquadManager({ squad, onSave, onBack }) {
     if (!name.trim()) return;
     const updated = [
       ...players,
-      { id: genId(), number: number.trim() || "-", name: name.trim() },
+      { id: genId(), number: number.trim() || "-", name: name.trim(), position: position || null },
     ];
     setPlayers(updated);
     onSave(updated);
     setNumber("");
     setName("");
+    setPosition("");
   }
 
   function removePlayer(id) {
@@ -1635,6 +1646,7 @@ function SquadManager({ squad, onSave, onBack }) {
     setEditingId(p.id);
     setEditNumber(String(p.number));
     setEditName(p.name);
+    setEditPosition(p.position || "");
   }
 
   function cancelEdit() {
@@ -1644,7 +1656,9 @@ function SquadManager({ squad, onSave, onBack }) {
   function saveEdit() {
     if (!editName.trim()) return;
     const updated = players.map((p) =>
-      p.id === editingId ? { ...p, number: editNumber.trim() || "-", name: editName.trim() } : p
+      p.id === editingId
+        ? { ...p, number: editNumber.trim() || "-", name: editName.trim(), position: editPosition || null }
+        : p
     );
     setPlayers(updated);
     onSave(updated);
@@ -1660,25 +1674,39 @@ function SquadManager({ squad, onSave, onBack }) {
         <h1 className="display text-2xl font-semibold">Plantilla</h1>
       </div>
 
-      <div className="mp-card p-3 mb-4 flex gap-2">
-        <input
-          value={number}
-          onChange={(e) => setNumber(e.target.value)}
-          placeholder="Dorsal"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          className="mp-input px-3 py-2 w-20 text-center"
-        />
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Nombre del jugador"
-          className="mp-input px-3 py-2 flex-1"
-          onKeyDown={(e) => e.key === "Enter" && addPlayer()}
-        />
-        <button onClick={addPlayer} className="mp-btn mp-btn-primary px-4 text-sm font-semibold">
-          Añadir
-        </button>
+      <div className="mp-card p-3 mb-4 flex flex-col gap-2">
+        <div className="flex gap-2">
+          <input
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            placeholder="Dorsal"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            className="mp-input px-3 py-2 w-20 text-center"
+          />
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nombre del jugador"
+            className="mp-input px-3 py-2 flex-1"
+            onKeyDown={(e) => e.key === "Enter" && addPlayer()}
+          />
+        </div>
+        <div className="flex gap-2">
+          <select
+            value={position}
+            onChange={(e) => setPosition(e.target.value)}
+            className="mp-input px-3 py-2 flex-1"
+          >
+            <option value="">Sin posición</option>
+            {PLAYER_POSITIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <button onClick={addPlayer} className="mp-btn mp-btn-primary px-4 text-sm font-semibold">
+            Añadir
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">
@@ -1687,34 +1715,53 @@ function SquadManager({ squad, onSave, onBack }) {
           .sort((a, b) => Number(a.number) - Number(b.number))
           .map((p) =>
             editingId === p.id ? (
-              <div key={p.id} className="mp-card p-3 flex items-center gap-2">
-                <input
-                  value={editNumber}
-                  onChange={(e) => setEditNumber(e.target.value)}
-                  placeholder="Dorsal"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  className="mp-input px-3 py-2 w-20 text-center"
-                />
-                <input
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  placeholder="Nombre del jugador"
-                  className="mp-input px-3 py-2 flex-1"
-                  onKeyDown={(e) => e.key === "Enter" && saveEdit()}
-                />
-                <button onClick={saveEdit} className="mp-btn mp-btn-primary px-3 py-2 text-sm font-semibold">
-                  Guardar
-                </button>
-                <button onClick={cancelEdit} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
-                  Cancelar
-                </button>
+              <div key={p.id} className="mp-card p-3 flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <input
+                    value={editNumber}
+                    onChange={(e) => setEditNumber(e.target.value)}
+                    placeholder="Dorsal"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className="mp-input px-3 py-2 w-20 text-center"
+                  />
+                  <input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Nombre del jugador"
+                    className="mp-input px-3 py-2 flex-1"
+                    onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <select
+                    value={editPosition}
+                    onChange={(e) => setEditPosition(e.target.value)}
+                    className="mp-input px-3 py-2 flex-1"
+                  >
+                    <option value="">Sin posición</option>
+                    {PLAYER_POSITIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  <button onClick={saveEdit} className="mp-btn mp-btn-primary px-3 py-2 text-sm font-semibold">
+                    Guardar
+                  </button>
+                  <button onClick={cancelEdit} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+                    Cancelar
+                  </button>
+                </div>
               </div>
             ) : (
               <div key={p.id} className="mp-card p-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="mp-shirt w-9 h-9 text-sm font-semibold">{p.number}</div>
-                  <span>{p.name}</span>
+                  <div>
+                    <div>{p.name}</div>
+                    <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                      {p.position ? PLAYER_POSITION_LABEL[p.position] || p.position : "Sin posición"}
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <button
