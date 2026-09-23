@@ -4240,6 +4240,8 @@ const SEASON_TABLE_BASE_COLUMNS = [
   { key: "name", label: "Jugador", numeric: false },
   { key: "position", label: "Pos.", numeric: false },
 ];
+// `avg: true` marca las columnas que muestran la media por partido jugado (con un decimal)
+// en vez del total acumulado — goles, asistencias y tarjetas siempre son totales.
 const SEASON_TABLE_COLUMN_GROUPS = {
   general: [
     { key: "matchesPlayed", label: "Partidos", numeric: true },
@@ -4248,17 +4250,17 @@ const SEASON_TABLE_COLUMN_GROUPS = {
     { key: "asistencias", label: "Asistencias", numeric: true },
   ],
   ataque: [
-    { key: "tirosPuerta", label: "Remates a puerta", numeric: true },
-    { key: "paseClave", label: "Pases clave", numeric: true },
-    { key: "regates", label: "Regates", numeric: true },
+    { key: "tirosPuerta", label: "Remates a puerta", numeric: true, avg: true },
+    { key: "paseClave", label: "Pases clave", numeric: true, avg: true },
+    { key: "regates", label: "Regates", numeric: true, avg: true },
   ],
   defensa: [
-    { key: "duelosGanados", label: "Duelos ganados", numeric: true },
-    { key: "despejes", label: "Despejes", numeric: true },
-    { key: "robos", label: "Recuperaciones", numeric: true },
+    { key: "duelosGanados", label: "Duelos ganados", numeric: true, avg: true },
+    { key: "despejes", label: "Despejes", numeric: true, avg: true },
+    { key: "robos", label: "Recuperaciones", numeric: true, avg: true },
   ],
   disciplina: [
-    { key: "faltasCometidas", label: "Faltas cometidas", numeric: true },
+    { key: "faltasCometidas", label: "Faltas cometidas", numeric: true, avg: true },
     { key: "amarillas", label: "Amarillas", numeric: true },
     { key: "rojas", label: "Rojas", numeric: true },
   ],
@@ -4304,6 +4306,8 @@ function SeasonPlayerTable({ squad, matches }) {
   const rows = squad.map((p) => {
     const s = computePlayerStats(p.id, allSeasonEvents);
     const matchesPlayed = played.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length;
+    // Media por partido jugado: total del evento entre partidos jugados por ese jugador.
+    const avgOf = (total) => (matchesPlayed > 0 ? total / matchesPlayed : 0);
     return {
       id: p.id,
       number: Number(p.number) || 0,
@@ -4313,13 +4317,13 @@ function SeasonPlayerTable({ squad, matches }) {
       minutes: minutesByPlayer[p.id] || 0,
       goles: s.goles,
       asistencias: s.asistencias,
-      tirosPuerta: s.tirosPuerta,
-      paseClave: s.paseClave,
-      regates: s.regatesOk,
-      duelosGanados: s.duelosGanados,
-      despejes: s.despejes,
-      robos: s.robos,
-      faltasCometidas: s.faltasCometidas,
+      tirosPuerta: avgOf(s.tirosPuerta),
+      paseClave: avgOf(s.paseClave),
+      regates: avgOf(s.regatesOk),
+      duelosGanados: avgOf(s.duelosGanados),
+      despejes: avgOf(s.despejes),
+      robos: avgOf(s.robos),
+      faltasCometidas: avgOf(s.faltasCometidas),
       amarillas: s.amarillas,
       rojas: s.rojas,
     };
@@ -4406,6 +4410,11 @@ function SeasonPlayerTable({ squad, matches }) {
                     style={{ color: sortKey === col.key ? "var(--chalk)" : "var(--chalk-dim)" }}
                   >
                     {col.label}
+                    {col.avg && (
+                      <span className="text-[9px] font-normal ml-0.5" style={{ color: "var(--chalk-dim)" }}>
+                        (prom.)
+                      </span>
+                    )}
                     {sortKey === col.key && <span className="ml-1">{sortDir === "asc" ? "▲" : "▼"}</span>}
                   </th>
                 ))}
@@ -4418,7 +4427,9 @@ function SeasonPlayerTable({ squad, matches }) {
                   <td className="p-2 whitespace-nowrap">{r.name}</td>
                   <td className="p-2 text-center">{r.position || "—"}</td>
                   {SEASON_TABLE_COLUMN_GROUPS[tab].map((col) => (
-                    <td key={col.key} className="p-2 text-center">{r[col.key] || 0}</td>
+                    <td key={col.key} className="p-2 text-center">
+                      {col.avg ? (r[col.key] || 0).toFixed(1) : r[col.key] || 0}
+                    </td>
                   ))}
                 </tr>
               ))}
