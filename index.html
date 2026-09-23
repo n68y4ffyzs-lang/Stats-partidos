@@ -37,6 +37,7 @@ const { useState, useEffect, useRef, useCallback } = React;
    funciona igualmente en modo solo-local (localStorage).
 =========================================================== */
 const TABLE = "registro_partido_data";
+const HISTORY_TABLE = "registro_partido_history";
 const SUPABASE_URL_KEY = "rp_supabase_url";
 const SUPABASE_ANON_KEY_KEY = "rp_supabase_anon_key";
 
@@ -681,6 +682,7 @@ const SYNC_META = {
   syncing: { color: "var(--cielo)", label: "Sincronizando…" },
   synced: { color: "var(--turf)", label: "Sincronizado" },
   error: { color: "var(--crimson)", label: "Error de sincronización" },
+  blocked: { color: "var(--amber)", label: "Sincronización cancelada (revisa)" },
 };
 
 function SyncBadge({ status, onClick }) {
@@ -710,11 +712,31 @@ function SyncSettings({
   onSaveTeamCode,
   onSaveConfig,
   onSyncNow,
+  onForcePush,
+  onForcePull,
+  history,
+  historyLoading,
+  onLoadHistory,
+  onRestoreHistory,
+  onExportJSON,
+  onImportJSON,
   onBack,
 }) {
   const [code, setCode] = useState(teamCode);
   const [url, setUrl] = useState(supabaseUrl);
   const [key, setKey] = useState(supabaseKey);
+  const importInputRef = useRef(null);
+
+  useEffect(() => {
+    if (configured && teamCode) onLoadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured, teamCode]);
+
+  function handleImportFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (file) onImportJSON(file);
+  }
 
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
@@ -810,10 +832,108 @@ function SyncSettings({
       <button
         onClick={onSyncNow}
         disabled={!configured || !teamCode}
-        className="mp-btn mp-btn-outline w-full py-2.5 text-sm disabled:opacity-40"
+        className="mp-btn mp-btn-outline w-full py-2.5 text-sm disabled:opacity-40 mb-4"
       >
         Sincronizar ahora
       </button>
+
+      <div className="mp-card p-3 mb-4">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+          Copia de seguridad manual
+        </label>
+        <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
+          Exporta un archivo JSON con todos los datos (plantilla, partidos, estadísticas) para
+          guardarlo donde quieras, o importa uno para restaurarlo en este dispositivo.
+        </p>
+        <div className="flex gap-2">
+          <button onClick={onExportJSON} className="mp-btn mp-btn-outline flex-1 py-2 text-sm">
+            Exportar JSON
+          </button>
+          <button
+            onClick={() => importInputRef.current && importInputRef.current.click()}
+            className="mp-btn mp-btn-outline flex-1 py-2 text-sm"
+          >
+            Importar JSON
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            onChange={handleImportFile}
+            style={{ display: "none" }}
+          />
+        </div>
+      </div>
+
+      {configured && teamCode && (
+        <>
+          <div className="mp-card p-3 mb-4">
+            <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+              Forzar sincronización
+            </label>
+            <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
+              Úsalo solo si un aviso te ha bloqueado la sincronización automática y sabes qué
+              versión quieres conservar.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={onForcePush} className="mp-btn mp-btn-outline flex-1 py-2 text-xs">
+                Forzar subida (gana este dispositivo)
+              </button>
+              <button onClick={onForcePull} className="mp-btn mp-btn-outline flex-1 py-2 text-xs">
+                Forzar descarga (gana la nube)
+              </button>
+            </div>
+          </div>
+
+          <div className="mp-card p-3 mb-4">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                Histórico de copias en la nube
+              </label>
+              <button
+                onClick={onLoadHistory}
+                disabled={historyLoading}
+                className="mp-btn mp-btn-outline px-2 py-1 text-xs disabled:opacity-40"
+              >
+                {historyLoading ? "Cargando…" : "Actualizar"}
+              </button>
+            </div>
+            <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
+              Cada sincronización guarda una copia con fecha y hora. Puedes recuperar cualquiera
+              de las últimas.
+            </p>
+            {history.length === 0 ? (
+              <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                {historyLoading ? "Cargando…" : "Todavía no hay copias guardadas."}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {history.map((entry) => {
+                  const squadLen = (entry.data.squad || []).length;
+                  const matchesLen = (entry.data.matchesList || []).length;
+                  return (
+                    <div key={entry.id} className="flex items-center justify-between gap-2 text-xs">
+                      <div className="min-w-0">
+                        <div>{new Date(entry.created_at).toLocaleString()}</div>
+                        <div style={{ color: "var(--chalk-dim)" }}>
+                          {squadLen} jugador{squadLen === 1 ? "" : "es"} · {matchesLen} partido
+                          {matchesLen === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => onRestoreHistory(entry)}
+                        className="mp-btn mp-btn-outline px-2 py-1 shrink-0"
+                      >
+                        Restaurar
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -5012,10 +5132,42 @@ function App() {
     return "synced";
   }
 
-  async function pushToSupabase(stamped) {
+  // Antes de sobrescribir la nube, comprueba que no vamos a perder jugadores o partidos que
+  // ya estaban guardados allí (p.ej. un dispositivo con datos desactualizados). Si detecta que
+  // se perdería información pide confirmación explícita en vez de sobrescribir sin más.
+  // `opts.force` salta esta comprobación (usado al restaurar una copia o al forzar la subida).
+  async function pushToSupabase(stamped, opts = {}) {
     if (!supabaseRef.current || !teamCodeRef.current) return;
     setSyncStatus("syncing");
     try {
+      if (!opts.force) {
+        const { data: existing, error: fetchErr } = await supabaseRef.current
+          .from(TABLE)
+          .select("data")
+          .eq("team_code", teamCodeRef.current)
+          .maybeSingle();
+        if (fetchErr) throw fetchErr;
+        const remoteData = existing && existing.data;
+        if (remoteData) {
+          const remoteSquad = (remoteData.squad || []).length;
+          const remoteMatches = (remoteData.matchesList || []).length;
+          const localSquad = (stamped.squad || []).length;
+          const localMatches = (stamped.matchesList || []).length;
+          if (localSquad < remoteSquad || localMatches < remoteMatches) {
+            const proceed = window.confirm(
+              `Aviso de posible pérdida de datos\n\n` +
+              `En la nube hay ${remoteSquad} jugador${remoteSquad === 1 ? "" : "es"} y ${remoteMatches} partido${remoteMatches === 1 ? "" : "s"}.\n` +
+              `Este dispositivo tiene ${localSquad} jugador${localSquad === 1 ? "" : "es"} y ${localMatches} partido${localMatches === 1 ? "" : "s"}.\n\n` +
+              `Si sincronizas ahora, la nube se sobrescribirá con menos datos de los que tiene guardados.\n\n` +
+              `¿Seguro que quieres continuar?`
+            );
+            if (!proceed) {
+              setSyncStatus("blocked");
+              return;
+            }
+          }
+        }
+      }
       const { error } = await supabaseRef.current.from(TABLE).upsert({
         team_code: teamCodeRef.current,
         data: stamped,
@@ -5023,6 +5175,13 @@ function App() {
         updated_at: new Date(stamped.updatedAt).toISOString(),
       });
       if (error) throw error;
+      // Copia en el histórico: no crítica, no bloquea ni falla la sincronización si falla.
+      supabaseRef.current
+        .from(HISTORY_TABLE)
+        .insert({ team_code: teamCodeRef.current, data: stamped, device_id: deviceId })
+        .then(({ error: histError }) => {
+          if (histError) console.error("Error guardando histórico", histError);
+        });
       setSyncStatus("synced");
       setLastSyncedAt(Date.now());
     } catch (e) {
@@ -5101,6 +5260,146 @@ function App() {
   function saveSupabaseConfig(url, key) {
     setStoredSupabaseConfig(url, key);
     setSupabaseConfig({ url, key });
+  }
+
+  // Escapes manuales para cuando el aviso automático de pérdida de datos no basta:
+  // forzar que gane este dispositivo, o forzar que gane la nube.
+  async function forcePushToCloud() {
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (
+      !window.confirm(
+        "Esto sobrescribirá los datos de la nube con los de este dispositivo, sin comprobaciones. ¿Continuar?"
+      )
+    )
+      return;
+    await pushToSupabase(dataRef.current, { force: true });
+  }
+
+  async function forcePullFromCloud() {
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (
+      !window.confirm(
+        "Esto sobrescribirá los datos de este dispositivo con los de la nube. ¿Continuar?"
+      )
+    )
+      return;
+    setSyncStatus("syncing");
+    try {
+      const { data: row, error } = await supabaseRef.current
+        .from(TABLE)
+        .select("data, updated_at")
+        .eq("team_code", teamCodeRef.current)
+        .maybeSingle();
+      if (error) throw error;
+      if (row && row.data) {
+        applyRemoteData(row.data, new Date(row.updated_at).getTime());
+        setSyncStatus("synced");
+        setLastSyncedAt(Date.now());
+      } else {
+        window.alert("No hay datos en la nube para este código de equipo.");
+        setSyncStatus(computeStatus());
+      }
+    } catch (e) {
+      console.error("Error descargando de Supabase", e);
+      setSyncStatus("error");
+    }
+  }
+
+  /* --- Histórico de copias en la nube --- */
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  async function loadHistory() {
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    setHistoryLoading(true);
+    try {
+      const { data: rows, error } = await supabaseRef.current
+        .from(HISTORY_TABLE)
+        .select("id, data, created_at")
+        .eq("team_code", teamCodeRef.current)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      setHistory(rows || []);
+    } catch (e) {
+      console.error("Error cargando histórico", e);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function restoreFromHistory(entry) {
+    const squadLen = (entry.data.squad || []).length;
+    const matchesLen = (entry.data.matchesList || []).length;
+    const when = new Date(entry.created_at).toLocaleString();
+    if (
+      !window.confirm(
+        `¿Restaurar la copia del ${when}?\n\n` +
+          `Esa copia tiene ${squadLen} jugador${squadLen === 1 ? "" : "es"} y ${matchesLen} partido${matchesLen === 1 ? "" : "s"}.\n\n` +
+          `Se sustituirán los datos actuales de este dispositivo y de la nube por esta copia.`
+      )
+    )
+      return;
+    const stamped = {
+      ...emptyData(),
+      ...entry.data,
+      setPiecePositions: migrateSetPiecePositions(entry.data.setPiecePositions || {}),
+      updatedAt: Date.now(),
+    };
+    setData(stamped);
+    dataRef.current = stamped;
+    saveLocalData(stamped);
+    await pushToSupabase(stamped, { force: true });
+  }
+
+  /* --- Copia de seguridad manual (JSON) --- */
+  function exportJSON() {
+    const blob = new Blob([JSON.stringify(dataRef.current, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    a.href = url;
+    a.download = `statix_backup_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function importJSON(file) {
+    const reader = new FileReader();
+    reader.onerror = () => window.alert("No se pudo leer el archivo.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch (e) {
+        window.alert("El archivo no es un JSON válido.");
+        return;
+      }
+      if (!parsed || !Array.isArray(parsed.squad) || !Array.isArray(parsed.matchesList)) {
+        window.alert("El archivo no tiene el formato esperado de una copia de Statix.");
+        return;
+      }
+      const currentSquad = dataRef.current.squad.length;
+      const currentMatches = dataRef.current.matchesList.length;
+      const importSquad = parsed.squad.length;
+      const importMatches = parsed.matchesList.length;
+      if (
+        !window.confirm(
+          `Vas a importar una copia con ${importSquad} jugador${importSquad === 1 ? "" : "es"} y ${importMatches} partido${importMatches === 1 ? "" : "s"}.\n\n` +
+            `Los datos actuales de este dispositivo (${currentSquad} jugador${currentSquad === 1 ? "" : "es"}, ${currentMatches} partido${currentMatches === 1 ? "" : "s"}) se sustituirán. ¿Continuar?`
+        )
+      )
+        return;
+      const merged = {
+        ...emptyData(),
+        ...parsed,
+        setPiecePositions: migrateSetPiecePositions(parsed.setPiecePositions || {}),
+      };
+      commit(merged);
+    };
+    reader.readAsText(file);
   }
 
   // Sincroniza al arrancar y suscribe a cambios en tiempo real
@@ -5581,6 +5880,14 @@ function App() {
           onSaveTeamCode={saveTeamCode}
           onSaveConfig={saveSupabaseConfig}
           onSyncNow={pullFromSupabase}
+          onForcePush={forcePushToCloud}
+          onForcePull={forcePullFromCloud}
+          history={history}
+          historyLoading={historyLoading}
+          onLoadHistory={loadHistory}
+          onRestoreHistory={restoreFromHistory}
+          onExportJSON={exportJSON}
+          onImportJSON={importJSON}
           onBack={goHome}
         />
       )}
