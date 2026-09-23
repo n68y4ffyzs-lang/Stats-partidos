@@ -3670,6 +3670,8 @@ function computePlayerStats(playerId, events) {
   const golesEncajados = count("gol_encajado");
   const amarillas = count("amarilla");
   const rojas = count("roja");
+  const paseClave = count("pase_clave");
+  const faltasCometidas = count("falta_cometida");
   return {
     duelosGanados,
     duelosPerdidos,
@@ -3695,6 +3697,8 @@ function computePlayerStats(playerId, events) {
     golesEncajados,
     amarillas,
     rojas,
+    paseClave,
+    faltasCometidas,
   };
 }
 
@@ -4227,34 +4231,210 @@ function PlayerStatsCharts({ players, events, matches }) {
   );
 }
 
+/* ---------------------------------------------------------
+   Tabla de estadísticas de temporada por jugador: buscador, pestañas
+   por bloque de columnas y cabeceras que ordenan al tocarlas.
+--------------------------------------------------------- */
+const SEASON_TABLE_BASE_COLUMNS = [
+  { key: "number", label: "#", numeric: true },
+  { key: "name", label: "Jugador", numeric: false },
+  { key: "position", label: "Pos.", numeric: false },
+];
+const SEASON_TABLE_COLUMN_GROUPS = {
+  general: [
+    { key: "matchesPlayed", label: "Partidos", numeric: true },
+    { key: "minutes", label: "Minutos", numeric: true },
+    { key: "goles", label: "Goles", numeric: true },
+    { key: "asistencias", label: "Asistencias", numeric: true },
+  ],
+  ataque: [
+    { key: "tirosPuerta", label: "Remates a puerta", numeric: true },
+    { key: "paseClave", label: "Pases clave", numeric: true },
+    { key: "regates", label: "Regates", numeric: true },
+  ],
+  defensa: [
+    { key: "duelosGanados", label: "Duelos ganados", numeric: true },
+    { key: "despejes", label: "Despejes", numeric: true },
+    { key: "robos", label: "Recuperaciones", numeric: true },
+  ],
+  disciplina: [
+    { key: "faltasCometidas", label: "Faltas cometidas", numeric: true },
+    { key: "amarillas", label: "Amarillas", numeric: true },
+    { key: "rojas", label: "Rojas", numeric: true },
+  ],
+};
+const SEASON_TABLE_TABS = [
+  { id: "general", label: "General" },
+  { id: "ataque", label: "Ataque" },
+  { id: "defensa", label: "Defensa" },
+  { id: "disciplina", label: "Disciplina" },
+];
+
+function SeasonLeaderCard({ label, leader, unit }) {
+  return (
+    <div className="mp-card p-3">
+      <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: "var(--chalk-dim)" }}>
+        {label}
+      </div>
+      {leader ? (
+        <React.Fragment>
+          <div className="text-sm font-semibold truncate">{leader.name}</div>
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            {leader.value} {unit}
+          </div>
+        </React.Fragment>
+      ) : (
+        <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Sin datos aún</div>
+      )}
+    </div>
+  );
+}
+
+function SeasonPlayerTable({ squad, matches }) {
+  const [search, setSearch] = useState("");
+  const [tab, setTab] = useState("general");
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+
+  const played = matches.filter((m) => !m.scheduled);
+  const allSeasonEvents = played.flatMap((m) => m.events);
+  const minutesByPlayer = computeSeasonMinutesByPlayer(matches);
+  const highlights = computeSeasonHighlights(matches, squad);
+
+  const rows = squad.map((p) => {
+    const s = computePlayerStats(p.id, allSeasonEvents);
+    const matchesPlayed = played.filter((m) => m.onPitch.includes(p.id) || m.bench.includes(p.id)).length;
+    return {
+      id: p.id,
+      number: Number(p.number) || 0,
+      name: p.name,
+      position: p.position || null,
+      matchesPlayed,
+      minutes: minutesByPlayer[p.id] || 0,
+      goles: s.goles,
+      asistencias: s.asistencias,
+      tirosPuerta: s.tirosPuerta,
+      paseClave: s.paseClave,
+      regates: s.regatesOk,
+      duelosGanados: s.duelosGanados,
+      despejes: s.despejes,
+      robos: s.robos,
+      faltasCometidas: s.faltasCometidas,
+      amarillas: s.amarillas,
+      rojas: s.rojas,
+    };
+  });
+
+  const filtered = rows.filter((r) => r.name.toLowerCase().includes(search.trim().toLowerCase()));
+  const columns = [...SEASON_TABLE_BASE_COLUMNS, ...SEASON_TABLE_COLUMN_GROUPS[tab]];
+
+  function handleSort(col) {
+    if (sortKey === col.key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(col.key);
+      setSortDir(col.numeric ? "desc" : "asc");
+    }
+  }
+
+  function changeTab(id) {
+    setTab(id);
+    setSortKey(null);
+  }
+
+  const sorted = [...filtered].sort((r1, r2) => {
+    if (!sortKey) return r1.number - r2.number;
+    const col = columns.find((c) => c.key === sortKey);
+    const numeric = col ? col.numeric : true;
+    const v1 = r1[sortKey];
+    const v2 = r2[sortKey];
+    let cmp;
+    if (v1 == null && v2 == null) cmp = 0;
+    else if (v1 == null) cmp = 1;
+    else if (v2 == null) cmp = -1;
+    else if (numeric) cmp = v1 - v2;
+    else cmp = String(v1).localeCompare(String(v2), "es");
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  return (
+    <div className="mb-4">
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <SeasonLeaderCard label="Máximo goleador" leader={highlights.topScorer} unit="goles" />
+        <SeasonLeaderCard label="Más asistencias" leader={highlights.topAssists} unit="asist." />
+        <SeasonLeaderCard label="Más minutos jugados" leader={highlights.mostMinutes} unit="min." />
+      </div>
+
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Buscar jugador…"
+        className="mp-input px-3 py-2 w-full mb-3"
+      />
+
+      <div className="flex gap-2 mb-3 flex-wrap">
+        {SEASON_TABLE_TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => changeTab(t.id)}
+            className="mp-btn px-3 py-1.5 text-sm flex-1"
+            style={tab === t.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+          {squad.length === 0
+            ? "Aún no hay jugadores en la plantilla."
+            : `Ningún jugador coincide con "${search}".`}
+        </div>
+      ) : (
+        <div className="mp-scroll overflow-x-auto">
+          <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {columns.map((col) => (
+                  <th
+                    key={col.key}
+                    onClick={() => handleSort(col)}
+                    className={`p-2 whitespace-nowrap select-none cursor-pointer ${
+                      col.key === "name" ? "text-left" : "text-center"
+                    }`}
+                    style={{ color: sortKey === col.key ? "var(--chalk)" : "var(--chalk-dim)" }}
+                  >
+                    {col.label}
+                    {sortKey === col.key && <span className="ml-1">{sortDir === "asc" ? "▲" : "▼"}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr key={r.id} className="mp-card">
+                  <td className="p-2 text-center">{r.number}</td>
+                  <td className="p-2 whitespace-nowrap">{r.name}</td>
+                  <td className="p-2 text-center">{r.position || "—"}</td>
+                  {SEASON_TABLE_COLUMN_GROUPS[tab].map((col) => (
+                    <td key={col.key} className="p-2 text-center">{r[col.key] || 0}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SeasonStats({ matches, squad, onBack, onGoCharts }) {
   const [showTeamStats, setShowTeamStats] = useState(false);
   const [showPlayerStats, setShowPlayerStats] = useState(false);
   const allSeasonEvents = matches.flatMap((m) => m.events);
-
-  const stats = {};
-  let matchesWithEvents = 0;
-
-  matches.forEach((m) => {
-    if (m.events.length > 0) matchesWithEvents += 1;
-    m.events
-      .filter((e) => e.type !== "pase_clave")
-      .forEach((e) => {
-        if (!stats[e.playerId]) {
-          stats[e.playerId] = { number: e.playerNumber, name: e.playerName, counts: {} };
-        }
-        stats[e.playerId].counts[e.type] = (stats[e.playerId].counts[e.type] || 0) + 1;
-      });
-  });
-
-  const rows = Object.values(stats)
-    .map((r) => {
-      const goles = ALL_GOAL_TYPES.reduce((sum, t) => sum + (r.counts[t] || 0), 0);
-      const asistencias = r.counts["asistencia"] || 0;
-      return { ...r, goles, asistencias, golesAsistencias: goles + asistencias };
-    })
-    .filter((r) => r.golesAsistencias > 0)
-    .sort((a, b) => b.golesAsistencias - a.golesAsistencias);
+  const matchesWithEvents = matches.filter((m) => m.events.length > 0).length;
 
   return (
     <div className="max-w-4xl mx-auto p-4 pb-10">
@@ -4271,34 +4451,7 @@ function SeasonStats({ matches, squad, onBack, onGoCharts }) {
         </div>
       </div>
 
-      {rows.length === 0 ? (
-        <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-          Aún no hay goles ni asistencias registrados en ningún partido.
-        </div>
-      ) : (
-        <div className="mp-scroll overflow-x-auto">
-          <table className="text-sm w-full" style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th className="text-left p-2" style={{ color: "var(--chalk-dim)" }}>Jugador</th>
-                <th className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>Goles</th>
-                <th className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>Asistencias</th>
-                <th className="text-center p-2 whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>Goles+Asistencias</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.number + r.name} className="mp-card">
-                  <td className="p-2 whitespace-nowrap">#{r.number} {r.name}</td>
-                  <td className="text-center p-2">{r.goles || "–"}</td>
-                  <td className="text-center p-2">{r.asistencias || "–"}</td>
-                  <td className="text-center p-2 font-semibold">{r.golesAsistencias}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <SeasonPlayerTable squad={squad} matches={matches} />
 
       <button
         onClick={() => setShowTeamStats((v) => !v)}
