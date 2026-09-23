@@ -79,6 +79,8 @@ const EVENT_TYPES = [
   { id: "duelo_perdido", label: "Duelo aéreo perdido", group: "defensa" },
   { id: "duelo_general_ganado", label: "Duelo ganado", group: "defensa" },
   { id: "duelo_general_perdido", label: "Duelo perdido", group: "defensa" },
+  { id: "despeje", label: "Despeje", group: "defensa" },
+  { id: "despeje_fallado", label: "Despeje fallado", group: "defensa" },
   { id: "falta_cometida", label: "Falta cometida", group: "defensa" },
   { id: "falta_recibida", label: "Falta recibida", group: "defensa" },
   { id: "amarilla", label: "Tarjeta amarilla", group: "disciplina" },
@@ -86,7 +88,6 @@ const EVENT_TYPES = [
   { id: "parada_area", label: "Parada dentro del área", group: "portero" },
   { id: "parada_fuera_area", label: "Parada fuera del área", group: "portero" },
   { id: "parada_area_pequena", label: "Parada área pequeña", group: "portero" },
-  { id: "despeje", label: "Despeje", group: "portero" },
   { id: "gol_encajado", label: "Gol encajado", group: "portero" },
 ];
 
@@ -3125,6 +3126,10 @@ function MatchTotals({ events, teamEvents = [] }) {
   const duelosPerdidos = (totals["duelo_perdido"] || 0) + (totals["duelo_general_perdido"] || 0);
   const duelosTotales = duelosGanados + duelosPerdidos;
   const duelosPct = duelosTotales === 0 ? null : Math.round((duelosGanados / duelosTotales) * 100);
+  const despejesOk = totals["despeje"] || 0;
+  const despejesFallados = totals["despeje_fallado"] || 0;
+  const despejesTotales = despejesOk + despejesFallados;
+  const despejesPct = despejesTotales === 0 ? null : Math.round((despejesOk / despejesTotales) * 100);
   const robos = totals["recuperacion"] || 0;
   const paradas =
     (totals["parada_area"] || 0) +
@@ -3148,6 +3153,11 @@ function MatchTotals({ events, teamEvents = [] }) {
         label="Duelos ganados"
         value={duelosPct === null ? "–" : `${duelosPct}%`}
         sub={duelosTotales === 0 ? "Sin duelos registrados" : `${duelosGanados} de ${duelosTotales}`}
+      />
+      <StatCard
+        label="Despejes"
+        value={despejesPct === null ? "–" : `${despejesPct}%`}
+        sub={despejesTotales === 0 ? "Sin despejes registrados" : `${despejesOk} de ${despejesTotales}`}
       />
       <StatCard label="Robos totales" value={robos} />
       <StatCard label="Paradas totales" value={paradas} />
@@ -3180,6 +3190,10 @@ function SeasonTeamStats({ matches }) {
     (sum, m) => sum + (m.concededSetPieces || []).length + m.events.filter((e) => e.type === "gol_encajado").length,
     0
   );
+  const despejesOk = count("despeje");
+  const despejesFallados = count("despeje_fallado");
+  const despejesTotales = despejesOk + despejesFallados;
+  const despejesPct = despejesTotales === 0 ? null : Math.round((despejesOk / despejesTotales) * 100);
 
   const avg = (total) => Math.round((total / n) * 10) / 10;
 
@@ -3194,6 +3208,11 @@ function SeasonTeamStats({ matches }) {
       <StatCard label="Tiros fuera/partido" value={avg(tirosFuera)} />
       <StatCard label="Córners por partido" value={avg(corners)} />
       <StatCard label="Robos por partido" value={avg(robos)} />
+      <StatCard
+        label="Despejes"
+        value={despejesPct === null ? "–" : `${despejesPct}%`}
+        sub={despejesTotales === 0 ? "Sin despejes registrados" : `${despejesOk} de ${despejesTotales}`}
+      />
     </div>
   );
 }
@@ -3219,6 +3238,9 @@ function computePlayerStats(playerId, events) {
   const asistencias = count("asistencia");
   const paradas = count("parada_area") + count("parada_fuera_area") + count("parada_area_pequena");
   const despejes = count("despeje");
+  const despejesFallados = count("despeje_fallado");
+  const despejesTotales = despejes + despejesFallados;
+  const despejesPct = despejesTotales === 0 ? null : Math.round((despejes / despejesTotales) * 100);
   const golesEncajados = count("gol_encajado");
   const amarillas = count("amarilla");
   const rojas = count("roja");
@@ -3241,6 +3263,9 @@ function computePlayerStats(playerId, events) {
     asistencias,
     paradas,
     despejes,
+    despejesFallados,
+    despejesTotales,
+    despejesPct,
     golesEncajados,
     amarillas,
     rojas,
@@ -3304,6 +3329,17 @@ function PlayerStatsAccordion({ players, events, matches }) {
                       {s.regatesTotales > 0 && (
                         <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
                           ({s.regatesOk} de {s.regatesTotales})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Despejes</span>
+                    <span className="text-sm font-semibold">
+                      {s.despejesPct === null ? "–" : `${s.despejesPct}%`}
+                      {s.despejesTotales > 0 && (
+                        <span className="text-xs font-normal ml-1" style={{ color: "var(--chalk-dim)" }}>
+                          ({s.despejes} de {s.despejesTotales})
                         </span>
                       )}
                     </span>
@@ -3555,6 +3591,13 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
       ],
     },
     {
+      title: "Despejes",
+      segments: [
+        { label: "Acertados", value: count("despeje"), color: "var(--turf)" },
+        { label: "Fallados", value: count("despeje_fallado"), color: "var(--crimson)" },
+      ],
+    },
+    {
       title: "Recuperaciones y pérdidas",
       segments: [
         { label: "Recuperado", value: count("recuperacion"), color: "var(--turf)" },
@@ -3697,6 +3740,11 @@ function PlayerStatsCharts({ players, events, matches }) {
       title: "Regates acertados",
       color: "var(--cielo)",
       rows: rowsForPct((s) => s.regatesPct, (s) => s.regatesOk, (s) => s.regatesTotales),
+    },
+    {
+      title: "Despejes",
+      color: "var(--cielo)",
+      rows: rowsForPct((s) => s.despejesPct, (s) => s.despejes, (s) => s.despejesTotales),
     },
     { title: "Recuperaciones por partido", color: "var(--cielo)", rows: rowsForAvg((s) => s.robos) },
     { title: "Balones perdidos por partido", color: "var(--crimson)", rows: rowsForAvg((s) => s.perdidas) },
