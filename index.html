@@ -2277,6 +2277,11 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
     title: section.title,
     events: section.ids.map((id) => EVENT_TYPES.find((ev) => ev.id === id)).filter(Boolean),
   })).filter((section) => section.title !== "Portero" || isGoalkeeperSelected);
+  // Con el portero hay una 4ª categoría (más eventos en total y columnas más estrechas):
+  // los botones se reducen lo justo para que todo siga cabiendo sin scroll.
+  const eventButtonsCompact = liveEventSections.length > 3;
+  const eventBtnPad = eventButtonsCompact ? "px-2 py-2.5" : "px-3 py-3.5";
+  const eventBtnText = eventButtonsCompact ? "text-xs" : "text-sm";
 
   const golesFavor = match.events.filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
   const golesContra =
@@ -2523,28 +2528,31 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
             className="mb-5"
             style={{ display: "grid", gridTemplateColumns: `repeat(${liveEventSections.length}, 1fr)`, gap: 8 }}
           >
-            {liveEventSections.map((section) => (
-              <div key={section.title}>
-                <div
-                  className="text-[10px] uppercase tracking-wide mb-1.5 font-semibold text-center"
-                  style={{ color: "var(--chalk-dim)" }}
-                >
-                  {section.title}
+            {liveEventSections.map((section) => {
+              const cols = section.events.length > 6 ? 3 : 2;
+              return (
+                <div key={section.title}>
+                  <div
+                    className="text-[10px] uppercase tracking-wide mb-1.5 font-semibold text-center"
+                    style={{ color: "var(--chalk-dim)" }}
+                  >
+                    {section.title}
+                  </div>
+                  <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+                    {section.events.map((ev) => (
+                      <button
+                        key={ev.id}
+                        disabled={!selectedPlayerId}
+                        onClick={() => addEvent(ev.id)}
+                        className={`mp-card ${eventChipCls(ev.id)} ${eventBtnPad} ${eventBtnText} font-semibold leading-tight text-left disabled:opacity-30`}
+                      >
+                        {ev.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex flex-col gap-1">
-                  {section.events.map((ev) => (
-                    <button
-                      key={ev.id}
-                      disabled={!selectedPlayerId}
-                      onClick={() => addEvent(ev.id)}
-                      className={`mp-card ${eventChipCls(ev.id)} px-2 py-2 text-xs font-semibold leading-tight text-left disabled:opacity-30`}
-                    >
-                      {ev.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
