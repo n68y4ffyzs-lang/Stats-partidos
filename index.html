@@ -530,13 +530,29 @@ function migrateSetPiecePositions(raw) {
   return out;
 }
 
+// Migra las 4 posiciones antiguas (Portero/Defensa/Centrocampista/Delantero) al nuevo detalle
+// de 9 posiciones (PT/DFI/DFC/DFD/CAI/CAD/MC/MCO/DC). Un jugador ya migrado no se toca.
+const LEGACY_POSITION_MIGRATION = {
+  portero: "PT",
+  defensa: "DFC",
+  centrocampista: "MC",
+  delantero: "DC",
+};
+function migrateSquadPositions(squad) {
+  return (squad || []).map((p) =>
+    p.position && LEGACY_POSITION_MIGRATION[p.position]
+      ? { ...p, position: LEGACY_POSITION_MIGRATION[p.position] }
+      : p
+  );
+}
+
 function loadLocalData() {
   try {
     const raw = localStorage.getItem(DATA_KEY);
     if (!raw) return emptyData();
     const parsed = JSON.parse(raw);
     return {
-      squad: parsed.squad || [],
+      squad: migrateSquadPositions(parsed.squad || []),
       matchesList: parsed.matchesList || [],
       matchesById: parsed.matchesById || {},
       setPiecePositions: migrateSetPiecePositions(parsed.setPiecePositions || {}),
@@ -1604,10 +1620,15 @@ function StatsHub({ onGoSeason, onGoSetPieces, onGoPitch, onGoCharts }) {
    Pantalla: Plantilla
 --------------------------------------------------------- */
 const PLAYER_POSITIONS = [
-  { value: "portero", label: "Portero" },
-  { value: "defensa", label: "Defensa" },
-  { value: "centrocampista", label: "Centrocampista" },
-  { value: "delantero", label: "Delantero" },
+  { value: "PT", label: "Portero" },
+  { value: "DFI", label: "Defensa izquierdo" },
+  { value: "DFC", label: "Defensa central" },
+  { value: "DFD", label: "Defensa derecho" },
+  { value: "CAI", label: "Carrilero izquierdo" },
+  { value: "CAD", label: "Carrilero derecho" },
+  { value: "MC", label: "Mediocentro" },
+  { value: "MCO", label: "Mediocentro ofensivo" },
+  { value: "DC", label: "Delantero" },
 ];
 const PLAYER_POSITION_LABEL = Object.fromEntries(PLAYER_POSITIONS.map((p) => [p.value, p.label]));
 
@@ -1700,7 +1721,7 @@ function SquadManager({ squad, onSave, onBack }) {
           >
             <option value="">Sin posición</option>
             {PLAYER_POSITIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
+              <option key={opt.value} value={opt.value}>{opt.value} — {opt.label}</option>
             ))}
           </select>
           <button onClick={addPlayer} className="mp-btn mp-btn-primary px-4 text-sm font-semibold">
@@ -1741,7 +1762,7 @@ function SquadManager({ squad, onSave, onBack }) {
                   >
                     <option value="">Sin posición</option>
                     {PLAYER_POSITIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      <option key={opt.value} value={opt.value}>{opt.value} — {opt.label}</option>
                     ))}
                   </select>
                   <button onClick={saveEdit} className="mp-btn mp-btn-primary px-3 py-2 text-sm font-semibold">
@@ -2563,6 +2584,40 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
 }
 
 /* ---------------------------------------------------------
+   Formación 1-3-5-2: huecos fijos en el campo (coordenadas 0..100, igual que
+   las posiciones que ya se guardan al tocar el campo). x = ancho del campo
+   (banda a banda), y = profundidad (100 = portería propia, 0 = ataque).
+--------------------------------------------------------- */
+const FORMATION_1_3_5_2 = [
+  { code: "PT", x: 50, y: 92 },
+  { code: "DFI", x: 25, y: 76 },
+  { code: "DFC", x: 50, y: 76 },
+  { code: "DFD", x: 75, y: 76 },
+  { code: "CAI", x: 12, y: 60 },
+  { code: "CAD", x: 88, y: 60 },
+  { code: "MC", x: 38, y: 46 },
+  { code: "MC", x: 62, y: 46 },
+  { code: "MCO", x: 50, y: 30 },
+  { code: "DC", x: 38, y: 12 },
+  { code: "DC", x: 62, y: 12 },
+];
+
+// Código de posición del hueco de formación más cercano a unas coordenadas del campo:
+// se usa para inferir "qué posición pasa a jugar" un jugador cuando se le coloca a mano.
+function nearestPositionCode(x, y) {
+  let best = null;
+  let bestDist = Infinity;
+  FORMATION_1_3_5_2.forEach((slot) => {
+    const d = (slot.x - x) ** 2 + (slot.y - y) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = slot.code;
+    }
+  });
+  return best;
+}
+
+/* ---------------------------------------------------------
    Campo: colocar a cada jugador en su posición
 --------------------------------------------------------- */
 function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
@@ -2674,14 +2729,56 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
   const unplacedIds = rosterOnPitch.filter((id) => !positions[id]);
   const selectedIsBench = !!selectedId && rosterBench.includes(selectedId);
 
+  // Añade al histórico del partido el código de posición más cercano a unas coordenadas, con el
+  // minuto exacto — pero solo si es distinto del último registrado para ese jugador, para no
+  // llenar el histórico de entradas repetidas por pequeños retoques dentro de la misma zona.
+  function appendPositionHistory(history, playerId, coords) {
+    const code = nearestPositionCode(coords.x, coords.y);
+    const last = [...history].reverse().find((h) => h.playerId === playerId);
+    if (last && last.code === code) return history;
+    return [
+      ...history,
+      { id: genId(), playerId, code, half: match.clock.activeHalf, minute: computeMinute(match) },
+    ];
+  }
+
   function setPosition(playerId, coords) {
-    onUpdate({ ...match, positions: { ...positions, [playerId]: coords } }, true);
+    const nextHistory = appendPositionHistory(match.positionHistory || [], playerId, coords);
+    onUpdate(
+      { ...match, positions: { ...positions, [playerId]: coords }, positionHistory: nextHistory },
+      true
+    );
   }
 
   function clearPosition(playerId) {
     const next = { ...positions };
     delete next[playerId];
     onUpdate({ ...match, positions: next }, true);
+  }
+
+  // Coloca automáticamente a los titulares en formación 1-3-5-2 según el código de posición
+  // guardado en su ficha de plantilla. Los huecos sin jugador con ese código, o los jugadores
+  // cuya posición no encaja en ningún hueco libre, se quedan sin colocar para ajustarlos a mano.
+  function autoPlaceFormation() {
+    if (placedIds.length > 0 && !window.confirm("Esto sustituirá la colocación actual de los jugadores ya puestos en el campo. ¿Continuar?")) {
+      return;
+    }
+    const slots = FORMATION_1_3_5_2.map((s) => ({ ...s, playerId: null }));
+    rosterOnPitch.forEach((id) => {
+      const p = playerById(id);
+      if (!p.position) return;
+      const slot = slots.find((s) => s.code === p.position && !s.playerId);
+      if (slot) slot.playerId = id;
+    });
+    const nextPositions = { ...positions };
+    let nextHistory = match.positionHistory || [];
+    slots.forEach((s) => {
+      if (!s.playerId) return;
+      const coords = { x: s.x, y: s.y };
+      nextPositions[s.playerId] = coords;
+      nextHistory = appendPositionHistory(nextHistory, s.playerId, coords);
+    });
+    onUpdate({ ...match, positions: nextPositions, positionHistory: nextHistory }, true);
   }
 
   function substitute(outId, inId) {
@@ -2703,12 +2800,21 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
       inNumber: inP.number,
     };
     const nextPositions = { ...positions };
+    let nextHistory = match.positionHistory || [];
     if (nextPositions[outId]) {
       nextPositions[inId] = nextPositions[outId];
+      nextHistory = appendPositionHistory(nextHistory, inId, nextPositions[outId]);
     }
     delete nextPositions[outId];
     onUpdate(
-      { ...match, onPitch: newOnPitch, bench: newBench, subs: [...match.subs, subEntry], positions: nextPositions },
+      {
+        ...match,
+        onPitch: newOnPitch,
+        bench: newBench,
+        subs: [...match.subs, subEntry],
+        positions: nextPositions,
+        positionHistory: nextHistory,
+      },
       true
     );
   }
@@ -2749,6 +2855,15 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
 
   return (
     <div className="mb-4">
+      {rosterOnPitch.length > 0 && (
+        <button
+          onClick={autoPlaceFormation}
+          className="mp-btn mp-btn-outline w-full py-2 text-sm mb-2"
+        >
+          Colocar automáticamente (1-3-5-2)
+        </button>
+      )}
+
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
         {selectedId
           ? selectedIsBench
@@ -5528,6 +5643,7 @@ function App() {
     const merged = {
       ...emptyData(),
       ...remoteData,
+      squad: migrateSquadPositions(remoteData.squad || []),
       setPiecePositions: migrateSetPiecePositions(remoteData.setPiecePositions || {}),
       updatedAt: remoteUpdatedAt,
     };
@@ -5662,6 +5778,7 @@ function App() {
     const stamped = {
       ...emptyData(),
       ...entry.data,
+      squad: migrateSquadPositions(entry.data.squad || []),
       setPiecePositions: migrateSetPiecePositions(entry.data.setPiecePositions || {}),
       updatedAt: Date.now(),
     };
@@ -5714,6 +5831,7 @@ function App() {
       const merged = {
         ...emptyData(),
         ...parsed,
+        squad: migrateSquadPositions(parsed.squad || []),
         setPiecePositions: migrateSetPiecePositions(parsed.setPiecePositions || {}),
       };
       commit(merged);
@@ -5929,6 +6047,7 @@ function App() {
       teamEvents: [],
       opponentChances: [],
       positions: {},
+      positionHistory: [],
       setPieceAssignments: {},
     };
     const updatedList = [
@@ -6015,6 +6134,7 @@ function App() {
           teamEvents: [],
           opponentChances: [],
           positions: {},
+          positionHistory: [],
           setPieceAssignments: {},
         }));
 
