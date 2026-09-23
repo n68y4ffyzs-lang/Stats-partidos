@@ -2519,19 +2519,25 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
               ? `Evento para ${playerById(selectedPlayerId).name}${isGoalkeeperSelected ? " (portero)" : ""}`
               : "Selecciona un jugador para registrar un evento"}
           </div>
-          <div className="flex flex-col gap-3">
+          <div
+            className="mb-5"
+            style={{ display: "grid", gridTemplateColumns: `repeat(${liveEventSections.length}, 1fr)`, gap: 8 }}
+          >
             {liveEventSections.map((section) => (
               <div key={section.title}>
-                <div className="text-xs uppercase tracking-wide mb-1.5 font-semibold" style={{ color: "var(--chalk-dim)" }}>
+                <div
+                  className="text-[10px] uppercase tracking-wide mb-1.5 font-semibold text-center"
+                  style={{ color: "var(--chalk-dim)" }}
+                >
                   {section.title}
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
                   {section.events.map((ev) => (
                     <button
                       key={ev.id}
                       disabled={!selectedPlayerId}
                       onClick={() => addEvent(ev.id)}
-                      className={`mp-card ${eventChipCls(ev.id)} px-4 py-5 text-base font-semibold text-left disabled:opacity-30`}
+                      className={`mp-card ${eventChipCls(ev.id)} px-2 py-2 text-xs font-semibold leading-tight text-left disabled:opacity-30`}
                     >
                       {ev.label}
                     </button>
