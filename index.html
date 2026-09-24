@@ -4240,8 +4240,9 @@ const SEASON_TABLE_BASE_COLUMNS = [
   { key: "name", label: "Jugador", numeric: false },
   { key: "position", label: "Pos.", numeric: false },
 ];
-// `avg: true` marca las columnas que muestran la media por partido jugado (con un decimal)
-// en vez del total acumulado — goles, asistencias y tarjetas siempre son totales.
+// `kind` indica cómo se muestra la columna: "avg" = media por partido jugado (con un decimal,
+// cabecera con "(prom.)"), "pct" = porcentaje de acierto (con "%", cabecera empieza por "%").
+// Sin `kind` = total acumulado — goles, asistencias y tarjetas siempre son totales.
 const SEASON_TABLE_COLUMN_GROUPS = {
   general: [
     { key: "matchesPlayed", label: "Partidos", numeric: true },
@@ -4250,17 +4251,17 @@ const SEASON_TABLE_COLUMN_GROUPS = {
     { key: "asistencias", label: "Asistencias", numeric: true },
   ],
   ataque: [
-    { key: "tirosPuerta", label: "Remates a puerta", numeric: true, avg: true },
-    { key: "paseClave", label: "Pases clave", numeric: true, avg: true },
-    { key: "regates", label: "Regates", numeric: true, avg: true },
+    { key: "tirosPuerta", label: "% Remates a puerta", numeric: true, kind: "pct" },
+    { key: "paseClave", label: "Pases clave", numeric: true, kind: "avg" },
+    { key: "regates", label: "% Regates", numeric: true, kind: "pct" },
   ],
   defensa: [
-    { key: "duelosGanados", label: "Duelos ganados", numeric: true, avg: true },
-    { key: "despejes", label: "Despejes", numeric: true, avg: true },
-    { key: "robos", label: "Recuperaciones", numeric: true, avg: true },
+    { key: "duelosGanados", label: "% Duelos ganados", numeric: true, kind: "pct" },
+    { key: "despejes", label: "% Despejes", numeric: true, kind: "pct" },
+    { key: "robos", label: "Recuperaciones", numeric: true, kind: "avg" },
   ],
   disciplina: [
-    { key: "faltasCometidas", label: "Faltas cometidas", numeric: true, avg: true },
+    { key: "faltasCometidas", label: "Faltas cometidas", numeric: true, kind: "avg" },
     { key: "amarillas", label: "Amarillas", numeric: true },
     { key: "rojas", label: "Rojas", numeric: true },
   ],
@@ -4317,11 +4318,14 @@ function SeasonPlayerTable({ squad, matches }) {
       minutes: minutesByPlayer[p.id] || 0,
       goles: s.goles,
       asistencias: s.asistencias,
-      tirosPuerta: avgOf(s.tirosPuerta),
+      // Porcentajes de acierto (null si no hay intentos): remates a puerta / remates totales,
+      // regates completados / regates totales, duelos ganados / duelos totales (normales + aéreos),
+      // despejes / (despejes + despejes fallados).
+      tirosPuerta: s.tirosPuertaPct,
       paseClave: avgOf(s.paseClave),
-      regates: avgOf(s.regatesOk),
-      duelosGanados: avgOf(s.duelosGanados),
-      despejes: avgOf(s.despejes),
+      regates: s.regatesPct,
+      duelosGanados: s.duelosPct,
+      despejes: s.despejesPct,
       robos: avgOf(s.robos),
       faltasCometidas: avgOf(s.faltasCometidas),
       amarillas: s.amarillas,
@@ -4410,7 +4414,7 @@ function SeasonPlayerTable({ squad, matches }) {
                     style={{ color: sortKey === col.key ? "var(--chalk)" : "var(--chalk-dim)" }}
                   >
                     {col.label}
-                    {col.avg && (
+                    {col.kind === "avg" && (
                       <span className="text-[9px] font-normal ml-0.5" style={{ color: "var(--chalk-dim)" }}>
                         (prom.)
                       </span>
@@ -4428,7 +4432,13 @@ function SeasonPlayerTable({ squad, matches }) {
                   <td className="p-2 text-center">{r.position || "—"}</td>
                   {SEASON_TABLE_COLUMN_GROUPS[tab].map((col) => (
                     <td key={col.key} className="p-2 text-center">
-                      {col.avg ? (r[col.key] || 0).toFixed(1) : r[col.key] || 0}
+                      {col.kind === "avg"
+                        ? (r[col.key] || 0).toFixed(1)
+                        : col.kind === "pct"
+                        ? r[col.key] == null
+                          ? "—"
+                          : `${r[col.key]}%`
+                        : r[col.key] || 0}
                     </td>
                   ))}
                 </tr>
