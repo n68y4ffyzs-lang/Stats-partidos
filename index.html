@@ -1632,7 +1632,7 @@ const PLAYER_POSITIONS = [
 ];
 const PLAYER_POSITION_LABEL = Object.fromEntries(PLAYER_POSITIONS.map((p) => [p.value, p.label]));
 
-function SquadManager({ squad, onSave, onBack }) {
+function SquadManager({ squad, matches, onSave, onBack }) {
   const [players, setPlayers] = useState(squad);
   const [number, setNumber] = useState("");
   const [name, setName] = useState("");
@@ -1643,6 +1643,8 @@ function SquadManager({ squad, onSave, onBack }) {
   const [editPosition, setEditPosition] = useState("");
 
   useEffect(() => setPlayers(squad), [squad]);
+
+  const seasonRatings = computeSeasonRatings(matches || [], squad);
 
   function addPlayer() {
     if (!name.trim()) return;
@@ -1785,6 +1787,14 @@ function SquadManager({ squad, onSave, onBack }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
+                  {seasonRatings[p.id] ? (
+                    <RatingBadge
+                      rating={seasonRatings[p.id].avg}
+                      title={`Nota media de temporada (${seasonRatings[p.id].matches} partido${seasonRatings[p.id].matches === 1 ? "" : "s"})`}
+                    />
+                  ) : (
+                    <span className="text-xs" style={{ color: "var(--chalk-dim)" }} title="Aún no ha jugado ningún partido">—</span>
+                  )}
                   <button
                     onClick={() => startEdit(p)}
                     className="text-sm"
@@ -2387,7 +2397,18 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
         >
           Campo
         </button>
+        {match.half === "finalizado" && (
+          <button
+            onClick={() => setTab("notas")}
+            className="mp-btn px-3 py-2 text-sm flex-1"
+            style={tab === "notas" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            Notas
+          </button>
+        )}
       </div>
+
+      {tab === "notas" && match.half === "finalizado" && <MatchRatingsList match={match} squad={squad} />}
 
       {tab === "campo" && (
         <FieldFormation match={match} squad={squad} crests={crests} playerById={playerById} onUpdate={onUpdate} />
@@ -3332,7 +3353,16 @@ function MatchSummary({ match, squad, crests, onBack, onExport }) {
         >
           Gráficos
         </button>
+        <button
+          onClick={() => setTab("notas")}
+          className="mp-btn px-3 py-2 text-sm flex-1"
+          style={tab === "notas" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          Notas
+        </button>
       </div>
+
+      {tab === "notas" && <MatchRatingsList match={match} squad={squad} />}
 
       {tab === "resumen" && (
         <React.Fragment>
@@ -3779,6 +3809,23 @@ function positionAtMinute(match, playerId, half, minute, fallbackCode) {
   return current;
 }
 
+function matchGoals(match) {
+  const favor = (match.events || []).filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
+  const contra =
+    (match.concededSetPieces || []).length + (match.events || []).filter((e) => e.type === "gol_encajado").length;
+  return { favor, contra };
+}
+
+function matchResultBonus(match) {
+  if (!(match.finished || match.half === "finalizado")) return 0;
+  const { favor, contra } = matchGoals(match);
+  if (favor <= contra) return 0;
+  let bonus = 0.5;
+  if (favor - contra >= 5) bonus += 1.0;
+  if (contra === 0) bonus += 1.0;
+  return bonus;
+}
+
 // Notas de un partido por jugador: { [playerId]: 7.2 } solo para quienes jugaron (titulares
 // y suplentes que entraron), recortadas a 0-10 y redondeadas a un decimal.
 function computeMatchRatings(match, squad) {
@@ -3809,6 +3856,11 @@ function computeMatchRatings(match, squad) {
     });
   });
 
+  // Bonificaciones por resultado, solo con el partido ya finalizado y si el equipo gana:
+  // +0.5 por ganar, +1.0 más si gana por 5 o más goles, +1.0 más si no encaja ninguno.
+  const bonus = matchResultBonus(match);
+  if (bonus > 0) Object.keys(scores).forEach((id) => { scores[id] += bonus; });
+
   const ratings = {};
   Object.keys(scores).forEach((id) => {
     ratings[id] = Math.round(Math.min(10, Math.max(0, scores[id])) * 10) / 10;
@@ -3837,22 +3889,60 @@ function computeSeasonRatings(matches, squad) {
   return result;
 }
 
+// Rojo 0-5.99, verde 6-7.99, azul 8-10 (mismo criterio en Plantilla, notas y estadísticas)
 function ratingColor(rating) {
-  if (rating >= 7.5) return "var(--turf)";
-  if (rating >= 6) return "var(--amber)";
+  if (rating >= 8) return "var(--cielo)";
+  if (rating >= 6) return "var(--turf)";
   return "var(--crimson)";
 }
 
-function RatingBadge({ rating }) {
+function RatingBadge({ rating, title = "Nota del partido (0-10)" }) {
   if (rating == null) return null;
   return (
     <span
       className="text-xs font-semibold px-1.5 py-0.5 rounded"
       style={{ color: ratingColor(rating), border: `1px solid ${ratingColor(rating)}` }}
-      title="Nota del partido (0-10)"
+      title={title}
     >
       {rating.toFixed(1)}
     </span>
+  );
+}
+
+// Pestaña "Notas" de un partido finalizado: jugadores que participaron, de mayor a menor nota.
+function MatchRatingsList({ match, squad }) {
+  const ratings = computeMatchRatings(match, squad);
+  const bonus = matchResultBonus(match);
+  const rows = Object.keys(ratings)
+    .map((id) => ({ id, player: squad.find((p) => p.id === id), rating: ratings[id] }))
+    .filter((r) => r.player)
+    .sort((a, b) => b.rating - a.rating || Number(a.player.number) - Number(b.player.number));
+
+  if (rows.length === 0) {
+    return (
+      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
+        Ningún jugador participó en este partido.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>
+        Nota final (0-10, base 6.0) según eventos y posición
+        {bonus > 0 && ` · incluye +${bonus.toFixed(1)} por el resultado`}
+      </div>
+      {rows.map((r, i) => (
+        <div key={r.id} className="mp-card px-3 py-2.5 flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <span className="text-xs w-5 text-right" style={{ color: "var(--chalk-dim)" }}>{i + 1}.</span>
+            <span className="font-semibold">#{r.player.number}</span>
+            <span>{r.player.name}</span>
+          </span>
+          <RatingBadge rating={r.rating} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -6603,14 +6693,25 @@ function App() {
   }
 
   function exportCSV() {
-    const rows = [["partido", "fecha", "rival", "parte", "minuto", "dorsal", "jugador", "evento"]];
+    // "nota" = nota final del jugador en el partido (vacía si no llegó a jugar)
+    const ratings = computeMatchRatings(match, data.squad);
+    const noteOf = (playerId) => (ratings[playerId] != null ? ratings[playerId].toFixed(1) : "");
+    const rows = [["partido", "fecha", "rival", "parte", "minuto", "dorsal", "jugador", "evento", "nota"]];
     match.events.forEach((e) => {
-      rows.push([match.id, match.date, match.opponent, e.half, e.minute, e.playerNumber, e.playerName, EVENT_LABEL[e.type] || e.type]);
+      rows.push([match.id, match.date, match.opponent, e.half, e.minute, e.playerNumber, e.playerName, EVENT_LABEL[e.type] || e.type, noteOf(e.playerId)]);
     });
     match.subs.forEach((s) => {
-      rows.push([match.id, match.date, match.opponent, s.half, s.minute, s.outNumber, s.outName, `sale (entra ${s.inName})`]);
-      rows.push([match.id, match.date, match.opponent, s.half, s.minute, s.inNumber, s.inName, `entra (sale ${s.outName})`]);
+      rows.push([match.id, match.date, match.opponent, s.half, s.minute, s.outNumber, s.outName, `sale (entra ${s.inName})`, noteOf(s.outId)]);
+      rows.push([match.id, match.date, match.opponent, s.half, s.minute, s.inNumber, s.inName, `entra (sale ${s.outName})`, noteOf(s.inId)]);
     });
+    // Una fila de "nota final" por cada jugador que participó, de mayor a menor nota
+    Object.keys(ratings)
+      .map((id) => ({ id, p: data.squad.find((pp) => pp.id === id) }))
+      .filter((r) => r.p)
+      .sort((a, b) => ratings[b.id] - ratings[a.id])
+      .forEach(({ id, p }) => {
+        rows.push([match.id, match.date, match.opponent, "", "", p.number, p.name, "nota final", noteOf(id)]);
+      });
     const csv = rows
       .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
       .join("\n");
@@ -6661,7 +6762,12 @@ function App() {
           />
         )}
         {view === "squad" && (
-          <SquadManager squad={data.squad} onSave={saveSquad} onBack={goHome} />
+          <SquadManager
+            squad={data.squad}
+            matches={Object.values(data.matchesById)}
+            onSave={saveSquad}
+            onBack={goHome}
+          />
         )}
         {view === "stats" && (
           <StatsHub
