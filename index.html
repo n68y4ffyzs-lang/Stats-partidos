@@ -2413,6 +2413,7 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
             <PlayerStatsAccordion
               players={[...rosterOnPitch, ...rosterBench].map((id) => playerById(id))}
               events={match.events}
+              ratings={computeMatchRatings(match, squad)}
             />
           )}
         </React.Fragment>
@@ -3405,7 +3406,11 @@ function MatchSummary({ match, squad, crests, onBack, onExport }) {
             {showPlayerStats ? "Ocultar estadísticas por jugador" : "Ver estadísticas por jugador"}
           </button>
           {showPlayerStats && (
-            <PlayerStatsAccordion players={rosterPlayers} events={match.events} />
+            <PlayerStatsAccordion
+              players={rosterPlayers}
+              events={match.events}
+              ratings={computeMatchRatings(match, squad)}
+            />
           )}
         </React.Fragment>
       )}
@@ -3566,10 +3571,10 @@ function SeasonTeamStats({ matches }) {
   );
 }
 
-// Minutos jugados por cada jugador en un partido concreto: reconstruye el once inicial
-// deshaciendo los cambios en orden inverso desde el `onPitch` final, y calcula cuánto
-// tiempo estuvo cada uno en el campo entre su entrada y su salida (o el final del partido).
-function computeMatchMinutes(match) {
+// Tramo que cada jugador pasó en el campo en un partido concreto ({ enter, exit } en minutos):
+// reconstruye el once inicial deshaciendo los cambios en orden inverso desde el `onPitch` final,
+// y cuenta desde su entrada (0 si fue titular) hasta su salida (o el final del partido).
+function computeMatchIntervals(match) {
   const totalMinutes =
     Math.round(((match.clock.half1Elapsed || 0) + (match.clock.half2Elapsed || 0)) / 60) ||
     (match.halfLength || 0) * 2;
@@ -3589,12 +3594,22 @@ function computeMatchMinutes(match) {
     enterMinute[s.inId] = s.minute;
   });
 
-  const minutesByPlayer = {};
+  const intervals = {};
   const participants = new Set([...starters, ...subsSorted.map((s) => s.inId)]);
   participants.forEach((id) => {
     const enter = enterMinute[id] != null ? enterMinute[id] : 0;
     const exit = exitMinute[id] != null ? exitMinute[id] : totalMinutes;
-    minutesByPlayer[id] = Math.max(0, exit - enter);
+    intervals[id] = { enter, exit };
+  });
+  return intervals;
+}
+
+// Minutos jugados por cada jugador en un partido concreto (duración de su tramo en el campo).
+function computeMatchMinutes(match) {
+  const intervals = computeMatchIntervals(match);
+  const minutesByPlayer = {};
+  Object.keys(intervals).forEach((id) => {
+    minutesByPlayer[id] = Math.max(0, intervals[id].exit - intervals[id].enter);
   });
   return minutesByPlayer;
 }
@@ -3702,7 +3717,146 @@ function computePlayerStats(playerId, events) {
   };
 }
 
-function PlayerStatsAccordion({ players, events, matches }) {
+/* ---------------------------------------------------------
+   Nota por partido (0-10, base 6.0): cada evento del jugador suma o resta según
+   la posición que ocupaba en el minuto exacto del evento (tramos de `positionHistory`
+   que se guardan al moverle en Campo), no según su posición fija de Plantilla.
+--------------------------------------------------------- */
+const RATING_BASE = 6.0;
+const RATING_POSITION_GROUP = {
+  PT: "PT",
+  DFI: "DEF", DFC: "DEF", DFD: "DEF",
+  CAI: "CAR", CAD: "CAR",
+  MC: "MC",
+  MCO: "MCO",
+  DC: "DC",
+};
+// Peso de cada evento por grupo de posición; un grupo sin peso (las "—" de la tabla) no suma ni resta.
+// `all` se aplica igual en cualquier posición (incluso si no se conoce).
+const RATING_WEIGHTS = {
+  gol: { PT: 2.0, DEF: 1.8, CAR: 1.5, MC: 1.5, MCO: 1.4, DC: 1.2 },
+  asistencia: { PT: 1.0, DEF: 1.0, CAR: 1.0, MC: 1.0, MCO: 0.9, DC: 0.9 },
+  remate_puerta: { DEF: 0.3, CAR: 0.25, MC: 0.22, MCO: 0.18, DC: 0.12 },
+  pase_clave: { DEF: 0.35, CAR: 0.18, MC: 0.15, MCO: 0.15, DC: 0.3 },
+  regate: { DEF: 0.3, CAR: 0.14, MC: 0.2, MCO: 0.16, DC: 0.14 },
+  duelo_ganado: { PT: 0.15, DEF: 0.15, CAR: 0.12, MC: 0.12, MCO: 0.08, DC: 0.05 },
+  despeje: { PT: 0.1, DEF: 0.15, CAR: 0.1 },
+  recuperacion: { DEF: 0.1, CAR: 0.1, MC: 0.15, MCO: 0.1, DC: 0.05 },
+  falta_cometida: { all: -0.15 },
+  amarilla: { all: -0.5 },
+  roja: { all: -1.5 },
+  parada: { PT: 0.3 },
+  gol_encajado: { PT: -0.3 },
+};
+// Tipos de evento registrados → fila de la tabla de pesos
+function ratingWeightKey(type) {
+  if (ALL_GOAL_TYPES.includes(type)) return "gol";
+  if (type === "duelo_ganado" || type === "duelo_general_ganado") return "duelo_ganado";
+  if (type === "parada_area" || type === "parada_fuera_area" || type === "parada_area_pequena") return "parada";
+  return RATING_WEIGHTS[type] ? type : null;
+}
+
+function ratingWeight(key, positionCode) {
+  const row = RATING_WEIGHTS[key];
+  if (!row) return 0;
+  if (row.all != null) return row.all;
+  const group = RATING_POSITION_GROUP[positionCode];
+  return (group && row[group]) || 0;
+}
+
+// Posición que ocupaba un jugador en un minuto dado: el último tramo de `positionHistory`
+// que empezó en o antes de ese momento. Si el evento es anterior a su primer tramo se usa
+// ese primer tramo, y si nunca se le colocó en Campo, su posición de Plantilla como respaldo.
+function positionAtMinute(match, playerId, half, minute, fallbackCode) {
+  const history = (match.positionHistory || [])
+    .filter((h) => h.playerId === playerId)
+    .sort((a, b) => a.half - b.half || a.minute - b.minute);
+  if (history.length === 0) return fallbackCode || null;
+  let current = history[0].code;
+  history.forEach((h) => {
+    if (h.half < half || (h.half === half && h.minute <= minute)) current = h.code;
+  });
+  return current;
+}
+
+// Notas de un partido por jugador: { [playerId]: 7.2 } solo para quienes jugaron (titulares
+// y suplentes que entraron), recortadas a 0-10 y redondeadas a un decimal.
+function computeMatchRatings(match, squad) {
+  const intervals = computeMatchIntervals(match);
+  const squadPosition = {};
+  (squad || []).forEach((p) => { squadPosition[p.id] = p.position || null; });
+  const posAt = (playerId, half, minute) =>
+    positionAtMinute(match, playerId, half, minute, squadPosition[playerId]);
+
+  const scores = {};
+  Object.keys(intervals).forEach((id) => { scores[id] = RATING_BASE; });
+
+  (match.events || []).forEach((e) => {
+    if (scores[e.playerId] == null) return;
+    const key = ratingWeightKey(e.type);
+    if (!key) return;
+    scores[e.playerId] += ratingWeight(key, posAt(e.playerId, e.half, e.minute));
+  });
+
+  // Goles encajados antiguos guardados como dato de equipo (sin jugador): restan al que
+  // estaba de PT en el campo en ese minuto.
+  (match.concededSetPieces || []).forEach((g) => {
+    Object.keys(intervals).forEach((id) => {
+      const { enter, exit } = intervals[id];
+      const minute = g.minute != null ? g.minute : exit;
+      if (minute < enter || minute > exit) return;
+      scores[id] += ratingWeight("gol_encajado", posAt(id, g.half || 2, minute));
+    });
+  });
+
+  const ratings = {};
+  Object.keys(scores).forEach((id) => {
+    ratings[id] = Math.round(Math.min(10, Math.max(0, scores[id])) * 10) / 10;
+  });
+  return ratings;
+}
+
+// Nota media de temporada por jugador (media de sus notas en los partidos jugados, sin los
+// programados): { [playerId]: { avg, matches } }, con la media redondeada a un decimal.
+function computeSeasonRatings(matches, squad) {
+  const sums = {};
+  matches
+    .filter((m) => !m.scheduled)
+    .forEach((m) => {
+      const ratings = computeMatchRatings(m, squad);
+      Object.keys(ratings).forEach((id) => {
+        if (!sums[id]) sums[id] = { total: 0, matches: 0 };
+        sums[id].total += ratings[id];
+        sums[id].matches += 1;
+      });
+    });
+  const result = {};
+  Object.keys(sums).forEach((id) => {
+    result[id] = { avg: Math.round((sums[id].total / sums[id].matches) * 10) / 10, matches: sums[id].matches };
+  });
+  return result;
+}
+
+function ratingColor(rating) {
+  if (rating >= 7.5) return "var(--turf)";
+  if (rating >= 6) return "var(--amber)";
+  return "var(--crimson)";
+}
+
+function RatingBadge({ rating }) {
+  if (rating == null) return null;
+  return (
+    <span
+      className="text-xs font-semibold px-1.5 py-0.5 rounded"
+      style={{ color: ratingColor(rating), border: `1px solid ${ratingColor(rating)}` }}
+      title="Nota del partido (0-10)"
+    >
+      {rating.toFixed(1)}
+    </span>
+  );
+}
+
+function PlayerStatsAccordion({ players, events, matches, ratings }) {
   const [openId, setOpenId] = useState(null);
 
   if (players.length === 0) {
@@ -3740,7 +3894,10 @@ function PlayerStatsAccordion({ players, events, matches }) {
                   <span className="font-semibold">#{p.number}</span>
                   <span>{p.name}</span>
                 </span>
-                <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
+                <span className="flex items-center gap-2">
+                  {ratings && <RatingBadge rating={ratings[p.id]} />}
+                  <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
+                </span>
               </button>
               {open && !isGoalkeeper && (
                 <div className="px-3 pb-3 flex flex-col gap-2">
@@ -4303,6 +4460,7 @@ function SeasonPlayerTable({ squad, matches }) {
   const allSeasonEvents = played.flatMap((m) => m.events);
   const minutesByPlayer = computeSeasonMinutesByPlayer(matches);
   const highlights = computeSeasonHighlights(matches, squad);
+  const seasonRatings = computeSeasonRatings(matches, squad);
 
   const rows = squad.map((p) => {
     const s = computePlayerStats(p.id, allSeasonEvents);
@@ -4330,6 +4488,8 @@ function SeasonPlayerTable({ squad, matches }) {
       faltasCometidas: avgOf(s.faltasCometidas),
       amarillas: s.amarillas,
       rojas: s.rojas,
+      // Nota media de temporada (null si no ha jugado ningún partido); aún sin columna propia.
+      rating: seasonRatings[p.id] ? seasonRatings[p.id].avg : null,
     };
   });
 
