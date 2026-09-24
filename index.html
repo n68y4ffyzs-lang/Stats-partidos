@@ -5608,10 +5608,13 @@ const SET_PIECE_SIDES = [
   { id: "favor", label: "A favor" },
   { id: "contra", label: "En contra" },
 ];
+// `favorOnly`: solo existe la variante a favor (no se diseñan saques de banda defensivos)
 const SET_PIECE_TYPES = [
   { id: "corner", label: "Córners" },
   { id: "falta", label: "Faltas" },
+  { id: "banda", label: "Saque de banda", favorOnly: true },
 ];
+const isFavorOnlyType = (typeId) => !!(SET_PIECE_TYPES.find((t) => t.id === typeId) || {}).favorOnly;
 
 /* ---------------------------------------------------------
    Campo → Balón parado: se elige una jugada ya diseñada (misma distribución de
@@ -5621,7 +5624,8 @@ const SET_PIECE_TYPES = [
 function LiveSetPieceBoard({ match, squad, setPiecePositions, playerById, onUpdate }) {
   const [side, setSide] = useState("favor");
   const [type, setType] = useState("corner");
-  const category = `${side}_${type}`;
+  const effectiveSide = isFavorOnlyType(type) ? "favor" : side;
+  const category = `${effectiveSide}_${type}`;
   const plays = Array.isArray(setPiecePositions[category]) ? setPiecePositions[category] : [];
   const [playId, setPlayId] = useState(null);
   const [selectedSlotId, setSelectedSlotId] = useState(null);
@@ -5675,11 +5679,12 @@ function LiveSetPieceBoard({ match, squad, setPiecePositions, playerById, onUpda
     setSelectedSlotId(null);
   }
 
-  const chip = (active, label, onClick) => (
+  const chip = (active, label, onClick, disabled) => (
     <button
       key={label}
       onClick={onClick}
-      className="mp-btn px-3 py-1.5 text-sm flex-1"
+      disabled={disabled}
+      className="mp-btn px-3 py-1.5 text-sm flex-1 disabled:opacity-40"
       style={active ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
     >
       {label}
@@ -5690,7 +5695,14 @@ function LiveSetPieceBoard({ match, squad, setPiecePositions, playerById, onUpda
     <div className="mp-card p-3 mt-4">
       <div className="text-sm font-semibold mb-2">Balón parado</div>
       <div className="flex gap-2 mb-2">
-        {SET_PIECE_SIDES.map((sd) => chip(side === sd.id, sd.label, () => changeCategory(sd.id, type)))}
+        {SET_PIECE_SIDES.map((sd) =>
+          chip(
+            effectiveSide === sd.id,
+            sd.label,
+            () => changeCategory(sd.id, type),
+            sd.id !== "favor" && isFavorOnlyType(type)
+          )
+        )}
       </div>
       <div className="flex gap-2 mb-3">
         {SET_PIECE_TYPES.map((t) => chip(type === t.id, t.label, () => changeCategory(side, t.id)))}
@@ -5916,7 +5928,9 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
   const [mainTab, setMainTab] = useState("estadisticas");
   const [spSide, setSpSide] = useState("favor");
   const [spType, setSpType] = useState("corner");
-  const spCategory = `${spSide}_${spType}`;
+  // Con un tipo solo a favor (saque de banda) el lado se fuerza a "a favor"
+  const spEffectiveSide = isFavorOnlyType(spType) ? "favor" : spSide;
+  const spCategory = `${spEffectiveSide}_${spType}`;
 
   const allEvents = matches.flatMap((m) => m.events);
   const countType = (type) => allEvents.filter((e) => e.type === type).length;
@@ -6016,8 +6030,9 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
               <button
                 key={s.id}
                 onClick={() => setSpSide(s.id)}
-                className="mp-btn px-3 py-2 text-sm flex-1"
-                style={spSide === s.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+                disabled={s.id !== "favor" && isFavorOnlyType(spType)}
+                className="mp-btn px-3 py-2 text-sm flex-1 disabled:opacity-40"
+                style={spEffectiveSide === s.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
               >
                 {s.label}
               </button>
