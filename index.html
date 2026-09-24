@@ -2006,11 +2006,183 @@ function SquadManager({ squad, matches, onSave, onBack }) {
 /* ---------------------------------------------------------
    Pantalla: Nuevo partido
 --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   Alineación de un partido: once inicial + desconvocados (con motivo opcional).
+   Los desconvocados se guardan en `match.desconvocados` ({ [playerId]: { reason, other } })
+   y no entran en `bench`, así que no cuentan para cambios, Campo ni estadísticas del partido.
+--------------------------------------------------------- */
+const UNCALLED_REASONS = [
+  { value: "lesion", label: "Lesión" },
+  { value: "sancion", label: "Sanción" },
+  { value: "tecnica", label: "Decisión técnica" },
+  { value: "personal", label: "Motivos personales" },
+  { value: "enfermedad", label: "Enfermedad" },
+  { value: "otro", label: "Otro" },
+];
+
+function uncalledReasonText(entry) {
+  if (!entry || !entry.reason) return "Sin especificar";
+  if (entry.reason === "otro") return entry.other && entry.other.trim() ? `Otro: ${entry.other.trim()}` : "Otro";
+  const r = UNCALLED_REASONS.find((x) => x.value === entry.reason);
+  return r ? r.label : "Sin especificar";
+}
+
+function LineupPicker({ squad, titulares, setTitulares, desconvocados, setDesconvocados, optional }) {
+  const [mode, setMode] = useState("titulares");
+  const sortedSquad = squad.slice().sort((a, b) => Number(a.number) - Number(b.number));
+  const uncalledIds = Object.keys(desconvocados).filter((id) => squad.some((p) => p.id === id));
+
+  function tap(id) {
+    if (mode === "titulares") {
+      if (desconvocados[id]) return;
+      setTitulares((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    } else {
+      setDesconvocados((prev) => {
+        const next = { ...prev };
+        if (next[id]) delete next[id];
+        else next[id] = { reason: "", other: "" };
+        return next;
+      });
+      setTitulares((prev) => prev.filter((x) => x !== id));
+    }
+  }
+
+  function setReason(id, patch) {
+    setDesconvocados((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }
+
+  const modeBtn = (id, label, activeStyle) => (
+    <button
+      onClick={() => setMode(id)}
+      className="mp-btn px-3 py-1.5 text-xs flex-1"
+      style={mode === id ? activeStyle : {}}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="mp-card p-3 mb-4">
+      <div className="flex gap-2 mb-2">
+        {modeBtn("titulares", "Marcar once inicial", { background: "var(--turf)", color: "#0F1B14", border: "none" })}
+        {modeBtn("desconvocados", "Marcar desconvocados", { background: "var(--crimson)", color: "#fff", border: "none" })}
+      </div>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+          {mode === "titulares"
+            ? `Once inicial${optional ? " (opcional por ahora)" : ""}`
+            : "Toca a los jugadores que no están convocados"}
+        </label>
+        <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+          {titulares.length} titulares · {uncalledIds.length} desconv.
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {sortedSquad.map((p) => {
+          const isStarter = titulares.includes(p.id);
+          const isUncalled = !!desconvocados[p.id];
+          let style = {};
+          if (isStarter) style = { background: "var(--turf)", color: "#0F1B14", border: "none" };
+          if (isUncalled) style = { background: "var(--crimson)", color: "#fff", border: "none", opacity: mode === "titulares" ? 0.45 : 1 };
+          return (
+            <button
+              key={p.id}
+              onClick={() => tap(p.id)}
+              className="mp-btn px-3 py-2 text-sm flex items-center gap-2"
+              style={style}
+            >
+              <span className="font-semibold">{p.number}</span>
+              <span style={isUncalled ? { textDecoration: "line-through" } : undefined}>{p.name}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {uncalledIds.length > 0 && (
+        <div className="mt-4">
+          <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>
+            Desconvocados — motivo (opcional)
+          </div>
+          <div className="flex flex-col gap-2">
+            {sortedSquad
+              .filter((p) => desconvocados[p.id])
+              .map((p) => {
+                const entry = desconvocados[p.id];
+                return (
+                  <div key={p.id} className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm flex-1 min-w-0 truncate">
+                        <span className="font-semibold">#{p.number}</span> {p.name}
+                      </span>
+                      <select
+                        value={entry.reason || ""}
+                        onChange={(e) => setReason(p.id, { reason: e.target.value })}
+                        className="mp-input px-2 py-1.5 text-sm"
+                      >
+                        <option value="">Sin especificar</option>
+                        {UNCALLED_REASONS.map((r) => (
+                          <option key={r.value} value={r.value}>{r.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {entry.reason === "otro" && (
+                      <input
+                        value={entry.other || ""}
+                        onChange={(e) => setReason(p.id, { other: e.target.value })}
+                        placeholder="Especifica el motivo"
+                        className="mp-input px-3 py-1.5 text-sm"
+                      />
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Lista de desconvocados de un partido con su motivo (para revisarlo después)
+function UncalledList({ match, squad }) {
+  const entries = Object.keys(match.desconvocados || {})
+    .map((id) => ({ p: squad.find((pp) => pp.id === id), entry: match.desconvocados[id] }))
+    .filter((r) => r.p)
+    .sort((a, b) => Number(a.p.number) - Number(b.p.number));
+  if (entries.length === 0) return null;
+  return (
+    <div className="mp-card p-3 mb-4">
+      <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Desconvocados</div>
+      <div className="flex flex-col gap-1">
+        {entries.map(({ p, entry }) => (
+          <div key={p.id} className="flex items-center justify-between gap-2 text-sm">
+            <span className="min-w-0 truncate">
+              <span className="font-semibold">#{p.number}</span> {p.name}
+            </span>
+            <span className="text-xs shrink-0" style={{ color: "var(--chalk-dim)" }}>{uncalledReasonText(entry)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Limpia los desconvocados antes de guardarlos: sin texto libre salvo en "Otro"
+function cleanUncalled(desconvocados) {
+  const out = {};
+  Object.keys(desconvocados || {}).forEach((id) => {
+    const e = desconvocados[id] || {};
+    out[id] = { reason: e.reason || "", other: e.reason === "otro" ? (e.other || "").trim() : "" };
+  });
+  return out;
+}
+
 function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad }) {
   const [opponent, setOpponent] = useState("");
   const [date, setDate] = useState(todayISO());
   const [halfLength, setHalfLength] = useState(45);
   const [titulares, setTitulares] = useState([]);
+  const [desconvocados, setDesconvocados] = useState({});
   const [isHome, setIsHome] = useState(true);
   // Escudo elegido para este rival (si no elige ninguno se usa el que ya haya guardado con ese nombre)
   const [newCrest, setNewCrest] = useState(null);
@@ -2018,16 +2190,17 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad })
   const isFuture = date > todayISO();
   const rivalCrestSrc = newCrest || rivalCrest(crests, opponent);
 
-  function toggle(id) {
-    setTitulares((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
-  }
-
   function submit() {
     if (!opponent.trim() || (!isFuture && titulares.length === 0)) return;
     if (newCrest) onSaveCrest("rival", opponent.trim(), newCrest);
-    onCreate({ opponent: opponent.trim(), date, halfLength: Number(halfLength) || 45, titulares, isHome });
+    onCreate({
+      opponent: opponent.trim(),
+      date,
+      halfLength: Number(halfLength) || 45,
+      titulares,
+      desconvocados: cleanUncalled(desconvocados),
+      isHome,
+    });
   }
 
   if (squad.length === 0) {
@@ -2121,33 +2294,14 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad })
         </div>
       )}
 
-      <div className="mp-card p-3 mb-4">
-        <div className="flex items-center justify-between mb-2">
-          <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-            Once inicial{isFuture ? " (opcional por ahora)" : ""}
-          </label>
-          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{titulares.length} seleccionados</span>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {squad
-            .slice()
-            .sort((a, b) => Number(a.number) - Number(b.number))
-            .map((p) => {
-              const active = titulares.includes(p.id);
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => toggle(p.id)}
-                  className="mp-btn px-3 py-2 text-sm flex items-center gap-2"
-                  style={active ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-                >
-                  <span className="font-semibold">{p.number}</span>
-                  <span>{p.name}</span>
-                </button>
-              );
-            })}
-        </div>
-      </div>
+      <LineupPicker
+        squad={squad}
+        titulares={titulares}
+        setTitulares={setTitulares}
+        desconvocados={desconvocados}
+        setDesconvocados={setDesconvocados}
+        optional={isFuture}
+      />
 
       <button
         onClick={submit}
@@ -2165,10 +2319,7 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad })
 --------------------------------------------------------- */
 function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, onBack }) {
   const [titulares, setTitulares] = useState(match.onPitch || []);
-
-  function toggle(id) {
-    setTitulares((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }
+  const [desconvocados, setDesconvocados] = useState(match.desconvocados || {});
 
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
@@ -2202,7 +2353,7 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
       </div>
 
       <div className="mp-card p-3 mb-4 text-sm" style={{ color: "var(--cielo)" }}>
-        Partido programado. Elige el once inicial y pulsa "Empezar partido" cuando llegue el día.
+        Partido programado. Elige el once inicial y los desconvocados, y pulsa "Empezar partido" cuando llegue el día.
       </div>
 
       {squad.length === 0 ? (
@@ -2210,35 +2361,17 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
           Primero necesitas añadir jugadores a la plantilla.
         </div>
       ) : (
-        <div className="mp-card p-3 mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Once inicial</label>
-            <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{titulares.length} seleccionados</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {squad
-              .slice()
-              .sort((a, b) => Number(a.number) - Number(b.number))
-              .map((p) => {
-                const active = titulares.includes(p.id);
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => toggle(p.id)}
-                    className="mp-btn px-3 py-2 text-sm flex items-center gap-2"
-                    style={active ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-                  >
-                    <span className="font-semibold">{p.number}</span>
-                    <span>{p.name}</span>
-                  </button>
-                );
-              })}
-          </div>
-        </div>
+        <LineupPicker
+          squad={squad}
+          titulares={titulares}
+          setTitulares={setTitulares}
+          desconvocados={desconvocados}
+          setDesconvocados={setDesconvocados}
+        />
       )}
 
       <button
-        onClick={() => onStart(titulares)}
+        onClick={() => onStart(titulares, cleanUncalled(desconvocados))}
         disabled={titulares.length === 0}
         className="mp-btn mp-btn-primary w-full py-3 font-semibold disabled:opacity-40 mb-2"
       >
@@ -3554,6 +3687,8 @@ function MatchSummary({ match, squad, crests, onBack, onExport }) {
           >
             Descargar CSV del partido
           </button>
+
+          <UncalledList match={match} squad={squad} />
 
           {rows.length === 0 ? (
             <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
@@ -5372,7 +5507,10 @@ function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId
     (match.setPieceAssignments && match.setPieceAssignments[category] && match.setPieceAssignments[category][playId]) ||
     {};
   const assignedPlayerIds = new Set(Object.values(assignments));
-  const unassigned = squad.filter((p) => !assignedPlayerIds.has(p.id));
+  // Los desconvocados de este partido no se pueden asignar a ninguna posición de la jugada
+  const unassigned = squad.filter(
+    (p) => !assignedPlayerIds.has(p.id) && !(match.desconvocados && match.desconvocados[p.id])
+  );
 
   function saveAssignments(next) {
     onAssign(match.id, category, playId, next);
@@ -6768,10 +6906,11 @@ function App() {
     setView("stats");
   }
 
-  function createMatch({ opponent, date, halfLength, titulares, isHome }) {
+  function createMatch({ opponent, date, halfLength, titulares, desconvocados = {}, isHome }) {
     const squad = dataRef.current.squad;
     const scheduled = date > todayISO();
-    const bench = squad.filter((p) => !titulares.includes(p.id)).map((p) => p.id);
+    // Suplentes = el resto de la plantilla menos los desconvocados de este partido
+    const bench = squad.filter((p) => !titulares.includes(p.id) && !desconvocados[p.id]).map((p) => p.id);
     const newMatch = {
       id: genId(),
       opponent,
@@ -6784,6 +6923,7 @@ function App() {
       clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
       onPitch: titulares,
       bench,
+      desconvocados,
       events: [],
       subs: [],
       concededSetPieces: [],
@@ -6811,15 +6951,16 @@ function App() {
     }
   }
 
-  function beginScheduledMatch(titulares) {
+  function beginScheduledMatch(titulares, desconvocados = {}) {
     const squad = dataRef.current.squad;
-    const bench = squad.filter((p) => !titulares.includes(p.id)).map((p) => p.id);
+    const bench = squad.filter((p) => !titulares.includes(p.id) && !desconvocados[p.id]).map((p) => p.id);
     const updated = {
       ...match,
       scheduled: false,
       half: 1,
       onPitch: titulares,
       bench,
+      desconvocados,
       clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
     };
     setMatch(updated);
