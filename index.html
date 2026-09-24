@@ -1766,7 +1766,7 @@ function StatsHub({ onGoSeason, onGoSetPieces, onGoPitch, onGoCharts }) {
   const tiles = [
     { label: "Temporada", icon: "📊", color: "var(--cielo)", onClick: onGoSeason },
     { label: "Balón parado", icon: "🎯", color: "var(--amber)", onClick: onGoSetPieces },
-    { label: "Campo", icon: "🏟️", color: "var(--violet)", onClick: onGoPitch },
+    { label: "Pizarra", icon: "🏟️", color: "var(--violet)", onClick: onGoPitch },
     { label: "Gráficos", icon: "📈", color: "var(--turf)", onClick: onGoCharts },
   ];
   return (
@@ -2832,7 +2832,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
           className="mp-btn px-3 py-2 text-sm flex-1"
           style={tab === "campo" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
         >
-          Campo
+          Pizarra
         </button>
         {match.half === "finalizado" && (
           <button
