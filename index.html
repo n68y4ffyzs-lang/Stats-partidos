@@ -2143,6 +2143,129 @@ function LineupPicker({ squad, titulares, setTitulares, desconvocados, setDescon
   );
 }
 
+// Selector de motivo de un desconvocado (desplegable + texto libre si es "Otro")
+function UncalledReasonInput({ entry, onChange }) {
+  return (
+    <React.Fragment>
+      <select
+        value={entry.reason || ""}
+        onChange={(e) => onChange({ reason: e.target.value }, true)}
+        className="mp-input px-2 py-1.5 text-sm"
+      >
+        <option value="">Sin especificar</option>
+        {UNCALLED_REASONS.map((r) => (
+          <option key={r.value} value={r.value}>{r.label}</option>
+        ))}
+      </select>
+      {entry.reason === "otro" && (
+        <input
+          value={entry.other || ""}
+          onChange={(e) => onChange({ other: e.target.value }, false)}
+          onBlur={() => onChange({}, true)}
+          placeholder="Especifica el motivo"
+          className="mp-input px-3 py-1.5 text-sm w-full"
+        />
+      )}
+    </React.Fragment>
+  );
+}
+
+// Convocatoria con el partido ya empezado: se puede desconvocar a un suplente que todavía no
+// ha participado (ni ha entrado ni tiene eventos) y volver a convocar a un desconvocado.
+function LiveUncalledPanel({ match, squad, playerById, onUpdate }) {
+  const [open, setOpen] = useState(false);
+  const desconvocados = match.desconvocados || {};
+  const uncalledIds = Object.keys(desconvocados).filter((id) => squad.some((p) => p.id === id));
+  const tookPart = (id) =>
+    (match.subs || []).some((s) => s.inId === id || s.outId === id) ||
+    (match.events || []).some((e) => e.playerId === id);
+  const eligibleBench = match.bench.filter((id) => squad.some((p) => p.id === id) && !tookPart(id));
+  const byNumber = (a, b) => Number(playerById(a).number) - Number(playerById(b).number);
+
+  function uncall(id) {
+    onUpdate(
+      {
+        ...match,
+        bench: match.bench.filter((x) => x !== id),
+        desconvocados: { ...desconvocados, [id]: { reason: "", other: "" } },
+      },
+      true
+    );
+  }
+
+  function recall(id) {
+    const next = { ...desconvocados };
+    delete next[id];
+    onUpdate({ ...match, bench: [...match.bench, id], desconvocados: next }, true);
+  }
+
+  function updateReason(id, patch, persistNow) {
+    const entry = { ...desconvocados[id], ...patch };
+    if (entry.reason !== "otro") entry.other = "";
+    onUpdate({ ...match, desconvocados: { ...desconvocados, [id]: entry } }, persistNow);
+  }
+
+  return (
+    <div className="mp-card p-3 mt-3">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between text-sm">
+        <span>
+          Convocatoria
+          <span className="text-xs ml-2" style={{ color: "var(--chalk-dim)" }}>
+            {uncalledIds.length} desconvocado{uncalledIds.length === 1 ? "" : "s"}
+          </span>
+        </span>
+        <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 flex flex-col gap-3">
+          <div>
+            <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>
+              Suplentes que aún no han jugado — toca para desconvocar
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {eligibleBench.sort(byNumber).map((id) => {
+                const p = playerById(id);
+                return (
+                  <button key={id} onClick={() => uncall(id)} className="mp-btn px-3 py-1.5 text-sm">
+                    {p.number} · {p.name}
+                  </button>
+                );
+              })}
+              {eligibleBench.length === 0 && (
+                <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes sin participar.</span>
+              )}
+            </div>
+          </div>
+          {uncalledIds.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>Desconvocados — motivo (opcional)</div>
+              {uncalledIds.sort(byNumber).map((id) => {
+                const p = playerById(id);
+                return (
+                  <div key={id} className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm flex-1 min-w-0 truncate">
+                        <span className="font-semibold">#{p.number}</span> {p.name}
+                      </span>
+                      <button onClick={() => recall(id)} className="text-xs shrink-0" style={{ color: "var(--cielo)" }}>
+                        Volver a convocar
+                      </button>
+                    </div>
+                    <UncalledReasonInput
+                      entry={desconvocados[id]}
+                      onChange={(patch, persistNow) => updateReason(id, patch, persistNow)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Lista de desconvocados de un partido con su motivo (para revisarlo después)
 function UncalledList({ match, squad }) {
   const entries = Object.keys(match.desconvocados || {})
@@ -2822,6 +2945,10 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
                 Cancelar
               </button>
             </div>
+          )}
+
+          {match.half !== "finalizado" && (
+            <LiveUncalledPanel match={match} squad={squad} playerById={playerById} onUpdate={onUpdate} />
           )}
         </div>
 
