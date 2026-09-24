@@ -2514,7 +2514,7 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
 /* ---------------------------------------------------------
    Pantalla: Partido en directo
 --------------------------------------------------------- */
-function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBack }) {
+function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpdate, onFinish, onBack }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [subOutId, setSubOutId] = useState(null);
@@ -2848,7 +2848,16 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
       {tab === "notas" && match.half === "finalizado" && <MatchRatingsList match={match} squad={squad} />}
 
       {tab === "campo" && (
-        <FieldFormation match={match} squad={squad} crests={crests} playerById={playerById} onUpdate={onUpdate} />
+        <React.Fragment>
+          <FieldFormation match={match} squad={squad} crests={crests} playerById={playerById} onUpdate={onUpdate} />
+          <LiveSetPieceBoard
+            match={match}
+            squad={squad}
+            setPiecePositions={setPiecePositions || {}}
+            playerById={playerById}
+            onUpdate={onUpdate}
+          />
+        </React.Fragment>
       )}
 
       {tab === "estadisticas" && (
@@ -5458,8 +5467,8 @@ function clampPitchCoord(v, min, max) {
 
 /* ---------------------------------------------------------
    Formación de una jugada de balón parado: define posiciones fijas
-   en el campo (independientes del jugador). Qué jugador ocupa cada
-   una se decide después, partido a partido, en SetPieceAssignmentBoard.
+   en el campo (marcadores genéricos, sin jugador). Qué jugador ocupa cada
+   una se decide en cada partido, en Campo → Balón parado (LiveSetPieceBoard).
 --------------------------------------------------------- */
 function SetPieceFormationEditor({ slots, ball, onSave }) {
   const [selected, setSelected] = useState(null); // { type: "slot", id } | { type: "ball" } | null
@@ -5588,204 +5597,8 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
         )}
       </div>
       <div className="text-xs mt-2" style={{ color: "var(--chalk-dim)" }}>
-        {slots.length} posición{slots.length === 1 ? "" : "es"} fija{slots.length === 1 ? "" : "s"}. Luego, en
-        "Asignar jugadores", eliges qué jugador ocupa cada una en cada partido.
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------
-   Asignación de una jugada de balón parado: para un partido concreto,
-   qué jugador de la plantilla ocupa cada posición fija ya definida.
---------------------------------------------------------- */
-function SetPieceAssignmentBoard({ slots, ball, squad, matches, category, playId, onAssign }) {
-  const sortedMatches = matches
-    .slice()
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  const [matchId, setMatchId] = useState(sortedMatches[0] ? sortedMatches[0].id : null);
-  const [selectedPlayerId, setSelectedPlayerId] = useState(null);
-  const [selectedSlotId, setSelectedSlotId] = useState(null);
-
-  const match = sortedMatches.find((m) => m.id === matchId) || sortedMatches[0] || null;
-
-  function playerById(id) {
-    return squad.find((p) => p.id === id) || { id, number: "?", name: "Desconocido" };
-  }
-
-  if (slots.length === 0) {
-    return (
-      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-        Primero define las posiciones fijas de esta jugada en "Formación".
-      </div>
-    );
-  }
-
-  if (!match) {
-    return (
-      <div className="mp-card p-4 text-sm" style={{ color: "var(--chalk-dim)" }}>
-        Todavía no hay ningún partido registrado.
-      </div>
-    );
-  }
-
-  const assignments =
-    (match.setPieceAssignments && match.setPieceAssignments[category] && match.setPieceAssignments[category][playId]) ||
-    {};
-  const assignedPlayerIds = new Set(Object.values(assignments));
-  // Los desconvocados de este partido no se pueden asignar a ninguna posición de la jugada
-  const unassigned = squad.filter(
-    (p) => !assignedPlayerIds.has(p.id) && !(match.desconvocados && match.desconvocados[p.id])
-  );
-
-  function saveAssignments(next) {
-    onAssign(match.id, category, playId, next);
-  }
-
-  function assignSlot(slotId, playerId) {
-    const next = { ...assignments };
-    // Un jugador solo puede ocupar una posición a la vez: si ya estaba en otra, la libera.
-    Object.keys(next).forEach((sId) => {
-      if (next[sId] === playerId) delete next[sId];
-    });
-    next[slotId] = playerId;
-    saveAssignments(next);
-  }
-
-  function clearSlot(slotId) {
-    const next = { ...assignments };
-    delete next[slotId];
-    saveAssignments(next);
-  }
-
-  function handleSlotClick(slot) {
-    if (selectedPlayerId) {
-      assignSlot(slot.id, selectedPlayerId);
-      setSelectedPlayerId(null);
-      setSelectedSlotId(null);
-      return;
-    }
-    setSelectedSlotId((prev) => (prev === slot.id ? null : slot.id));
-  }
-
-  function handlePlayerClick(id) {
-    if (selectedSlotId) {
-      assignSlot(selectedSlotId, id);
-      setSelectedSlotId(null);
-      setSelectedPlayerId(null);
-      return;
-    }
-    setSelectedPlayerId((prev) => (prev === id ? null : id));
-  }
-
-  return (
-    <div>
-      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Partido</div>
-      <div className="flex flex-wrap gap-2 mb-3">
-        {sortedMatches.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => {
-              setMatchId(m.id);
-              setSelectedPlayerId(null);
-              setSelectedSlotId(null);
-            }}
-            className="mp-btn px-3 py-2 text-sm"
-            style={match.id === m.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-          >
-            vs {m.opponent} · {m.date}
-          </button>
-        ))}
-      </div>
-
-      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
-        {selectedPlayerId
-          ? `Toca una posición para colocar a ${playerById(selectedPlayerId).name}`
-          : selectedSlotId
-          ? "Toca un jugador para colocarlo aquí, o quítalo con el botón de abajo"
-          : "Toca un jugador y luego una posición para colocarlo, o toca directamente una posición"}
-      </div>
-
-      <MiniPitch>
-        {slots.map((slot) => {
-          const occupantId = assignments[slot.id];
-          const occupant = occupantId ? playerById(occupantId) : null;
-          const isSelected = selectedSlotId === slot.id;
-          return (
-            <button
-              key={slot.id}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSlotClick(slot);
-              }}
-              className={`mp-shirt w-10 h-10 text-sm font-semibold ${isSelected ? "selected" : ""}`}
-              style={{
-                position: "absolute",
-                left: `${slot.x}%`,
-                top: `${slot.y}%`,
-                transform: "translate(-50%, -50%)",
-                borderStyle: occupant ? "solid" : "dashed",
-                opacity: occupant ? 1 : 0.65,
-              }}
-            >
-              {occupant && occupant.number}
-            </button>
-          );
-        })}
-
-        {ball && (
-          <div
-            className="mp-shirt w-8 h-8 text-base"
-            style={{
-              position: "absolute",
-              left: `${ball.x}%`,
-              top: `${ball.y}%`,
-              transform: "translate(-50%, -50%)",
-              background: "#F4F1E8",
-            }}
-          >
-            ⚽
-          </div>
-        )}
-      </MiniPitch>
-
-      {selectedSlotId && assignments[selectedSlotId] && (
-        <button
-          onClick={() => {
-            clearSlot(selectedSlotId);
-            setSelectedSlotId(null);
-          }}
-          className="mp-btn mp-btn-outline w-full py-2 text-xs mb-3"
-          style={{ color: "var(--crimson)" }}
-        >
-          Quitar a {playerById(assignments[selectedSlotId]).name} de esta posición
-        </button>
-      )}
-
-      <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Jugadores sin colocar</div>
-      <div className="flex flex-wrap gap-2">
-        {unassigned.length === 0 && (
-          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-            Todos los jugadores de la plantilla están colocados.
-          </span>
-        )}
-        {unassigned.map((p) => {
-          const selected = selectedPlayerId === p.id;
-          return (
-            <div key={p.id} className="flex flex-col items-center gap-1" style={{ width: 56 }}>
-              <button
-                onClick={() => handlePlayerClick(p.id)}
-                className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
-              >
-                {p.number}
-              </button>
-              <span className="text-[10px] text-center leading-tight" style={{ color: "var(--chalk-dim)" }}>
-                {p.name.split(" ")[0]}
-              </span>
-            </div>
-          );
-        })}
+        {slots.length} {slots.length === 1 ? "posición" : "posiciones"} fija{slots.length === 1 ? "" : "s"}. En cada
+        partido, desde Campo → Balón parado, eliges qué jugador ocupa cada una.
       </div>
     </div>
   );
@@ -5801,14 +5614,226 @@ const SET_PIECE_TYPES = [
 ];
 
 /* ---------------------------------------------------------
+   Campo → Balón parado: se elige una jugada ya diseñada (misma distribución de
+   círculos) y se asigna a cada círculo un jugador de los que están en el campo en
+   este partido. Se guarda en match.setPieceAssignments[categoría][jugada] = { slotId: playerId }.
+--------------------------------------------------------- */
+function LiveSetPieceBoard({ match, squad, setPiecePositions, playerById, onUpdate }) {
+  const [side, setSide] = useState("favor");
+  const [type, setType] = useState("corner");
+  const category = `${side}_${type}`;
+  const plays = Array.isArray(setPiecePositions[category]) ? setPiecePositions[category] : [];
+  const [playId, setPlayId] = useState(null);
+  const [selectedSlotId, setSelectedSlotId] = useState(null);
+  const play = plays.find((pl) => pl.id === playId) || plays[0] || null;
+
+  // Disponibles: los que están ahora en el campo (titulares que siguen + suplentes que han
+  // entrado). Los desconvocados nunca están en el campo, así que quedan fuera.
+  const available = (match.onPitch || [])
+    .filter((id) => squad.some((p) => p.id === id))
+    .sort((a, b) => Number(playerById(a).number) - Number(playerById(b).number));
+
+  const assignments =
+    (play && match.setPieceAssignments && match.setPieceAssignments[category] && match.setPieceAssignments[category][play.id]) ||
+    {};
+
+  function saveAssignments(next) {
+    onUpdate(
+      {
+        ...match,
+        setPieceAssignments: {
+          ...(match.setPieceAssignments || {}),
+          [category]: { ...((match.setPieceAssignments || {})[category] || {}), [play.id]: next },
+        },
+      },
+      true
+    );
+  }
+
+  function assign(slotId, playerId) {
+    const next = { ...assignments };
+    // Un jugador solo ocupa un círculo: si ya estaba en otro, lo libera
+    Object.keys(next).forEach((sId) => {
+      if (next[sId] === playerId) delete next[sId];
+    });
+    next[slotId] = playerId;
+    saveAssignments(next);
+    setSelectedSlotId(null);
+  }
+
+  function clearSlot(slotId) {
+    const next = { ...assignments };
+    delete next[slotId];
+    saveAssignments(next);
+    setSelectedSlotId(null);
+  }
+
+  function changeCategory(nextSide, nextType) {
+    setSide(nextSide);
+    setType(nextType);
+    setPlayId(null);
+    setSelectedSlotId(null);
+  }
+
+  const chip = (active, label, onClick) => (
+    <button
+      key={label}
+      onClick={onClick}
+      className="mp-btn px-3 py-1.5 text-sm flex-1"
+      style={active ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="mp-card p-3 mt-4">
+      <div className="text-sm font-semibold mb-2">Balón parado</div>
+      <div className="flex gap-2 mb-2">
+        {SET_PIECE_SIDES.map((sd) => chip(side === sd.id, sd.label, () => changeCategory(sd.id, type)))}
+      </div>
+      <div className="flex gap-2 mb-3">
+        {SET_PIECE_TYPES.map((t) => chip(type === t.id, t.label, () => changeCategory(side, t.id)))}
+      </div>
+
+      {plays.length === 0 ? (
+        <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>
+          No hay jugadas diseñadas de este tipo. Créalas en Stats → Balón parado → Posiciones.
+        </div>
+      ) : (
+        <React.Fragment>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {plays.map((pl) => (
+              <button
+                key={pl.id}
+                onClick={() => {
+                  setPlayId(pl.id);
+                  setSelectedSlotId(null);
+                }}
+                className="mp-btn px-3 py-1.5 text-sm"
+                style={play && play.id === pl.id ? { background: "var(--cielo)", color: "#0F1B14", border: "none" } : {}}
+              >
+                {pl.name}
+              </button>
+            ))}
+          </div>
+
+          {(play.slots || []).length === 0 ? (
+            <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>
+              Esta jugada aún no tiene posiciones colocadas.
+            </div>
+          ) : (
+            <React.Fragment>
+              <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+                {selectedSlotId ? "Elige el jugador para este círculo" : "Toca un círculo para asignarle un jugador"}
+              </div>
+              <MiniPitch>
+                {play.slots.map((slot) => {
+                  const occupantId = assignments[slot.id];
+                  const occupant = occupantId && squad.some((p) => p.id === occupantId) ? playerById(occupantId) : null;
+                  const isSelected = selectedSlotId === slot.id;
+                  return (
+                    <div
+                      key={slot.id}
+                      className="flex flex-col items-center"
+                      style={{
+                        position: "absolute",
+                        left: `${slot.x}%`,
+                        top: `${slot.y}%`,
+                        transform: "translate(-50%, -20px)",
+                      }}
+                    >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedSlotId(isSelected ? null : slot.id);
+                        }}
+                        className={`mp-shirt w-10 h-10 text-sm font-semibold ${isSelected ? "selected" : ""}`}
+                        style={{ borderStyle: occupant ? "solid" : "dashed", opacity: occupant ? 1 : 0.65 }}
+                      >
+                        {occupant ? occupant.number : ""}
+                      </button>
+                      {occupant && (
+                        <span
+                          className="text-[10px] font-semibold mt-0.5 px-1 rounded whitespace-nowrap"
+                          style={{ background: "rgba(0,0,0,0.55)", color: "#fff" }}
+                        >
+                          {occupant.name.split(" ")[0]}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {play.ball && (
+                  <div
+                    className="mp-shirt w-8 h-8 text-base"
+                    style={{
+                      position: "absolute",
+                      left: `${play.ball.x}%`,
+                      top: `${play.ball.y}%`,
+                      transform: "translate(-50%, -50%)",
+                      background: "#F4F1E8",
+                    }}
+                  >
+                    ⚽
+                  </div>
+                )}
+              </MiniPitch>
+
+              {selectedSlotId && (
+                <div className="mp-card p-3">
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {available.map((id) => {
+                      const p = playerById(id);
+                      const inSlot = Object.keys(assignments).find((sId) => assignments[sId] === id);
+                      const here = inSlot === selectedSlotId;
+                      return (
+                        <button
+                          key={id}
+                          onClick={() => assign(selectedSlotId, id)}
+                          className="mp-btn px-3 py-1.5 text-sm"
+                          style={
+                            here
+                              ? { background: "var(--turf)", color: "#0F1B14", border: "none" }
+                              : inSlot
+                              ? { opacity: 0.55 }
+                              : {}
+                          }
+                        >
+                          {p.number} · {p.name}
+                        </button>
+                      );
+                    })}
+                    {available.length === 0 && (
+                      <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay jugadores en el campo.</span>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    {assignments[selectedSlotId] && (
+                      <button onClick={() => clearSlot(selectedSlotId)} className="text-xs" style={{ color: "var(--crimson)" }}>
+                        Dejar vacío
+                      </button>
+                    )}
+                    <button onClick={() => setSelectedSlotId(null)} className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </React.Fragment>
+          )}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    Jugadas de una categoría de balón parado (p.ej. córners a favor):
    varias jugadas con nombre propio, cada una con su propio medio campo
 --------------------------------------------------------- */
-function SetPieceCategoryEditor({ plays, squad, matches, category, onSave, onAssign }) {
+function SetPieceCategoryEditor({ plays, onSave }) {
   const [activePlayId, setActivePlayId] = useState(plays[0] ? plays[0].id : null);
-  // Al entrar se ve siempre la formación guardada (qué jugadas tenemos), independientemente
-  // de si hay partidos con once elegido; asignar jugadores es un paso posterior, partido a partido.
-  const [mode, setMode] = useState("formacion"); // "formacion" | "asignar"
 
   const activePlay = plays.find((pl) => pl.id === activePlayId) || null;
 
@@ -5816,7 +5841,6 @@ function SetPieceCategoryEditor({ plays, squad, matches, category, onSave, onAss
     const newPlay = { id: genId(), name: `Jugada ${plays.length + 1}`, slots: [], ball: null };
     onSave([...plays, newPlay]);
     setActivePlayId(newPlay.id);
-    setMode("formacion");
   }
 
   function renamePlay(id, name) {
@@ -5876,49 +5900,19 @@ function SetPieceCategoryEditor({ plays, squad, matches, category, onSave, onAss
             </button>
           </div>
 
-          <div className="flex gap-2 mb-3">
-            <button
-              onClick={() => setMode("formacion")}
-              className="mp-btn px-3 py-2 text-sm flex-1"
-              style={mode === "formacion" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-            >
-              Formación
-            </button>
-            <button
-              onClick={() => setMode("asignar")}
-              className="mp-btn px-3 py-2 text-sm flex-1"
-              style={mode === "asignar" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
-            >
-              Asignar jugadores
-            </button>
-          </div>
-
-          {mode === "formacion" ? (
-            <SetPieceFormationEditor
-              key={activePlay.id}
-              slots={activePlay.slots || []}
-              ball={activePlay.ball || null}
-              onSave={(next) => saveFormation(activePlay.id, next)}
-            />
-          ) : (
-            <SetPieceAssignmentBoard
-              key={activePlay.id}
-              slots={activePlay.slots || []}
-              ball={activePlay.ball || null}
-              squad={squad}
-              matches={matches}
-              category={category}
-              playId={activePlay.id}
-              onAssign={onAssign}
-            />
-          )}
+          <SetPieceFormationEditor
+            key={activePlay.id}
+            slots={activePlay.slots || []}
+            ball={activePlay.ball || null}
+            onSave={(next) => saveFormation(activePlay.id, next)}
+          />
         </React.Fragment>
       )}
     </div>
   );
 }
 
-function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositions, onSaveAssignment, onBack }) {
+function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositions, onBack }) {
   const [mainTab, setMainTab] = useState("estadisticas");
   const [spSide, setSpSide] = useState("favor");
   const [spType, setSpType] = useState("corner");
@@ -6045,11 +6039,7 @@ function SetPieceStats({ matches, squad, setPiecePositions, onSaveSetPiecePositi
           <SetPieceCategoryEditor
             key={spCategory}
             plays={Array.isArray(setPiecePositions[spCategory]) ? setPiecePositions[spCategory] : []}
-            squad={squad}
-            matches={matches}
-            category={spCategory}
             onSave={(plays) => onSaveSetPiecePositions(spCategory, plays)}
-            onAssign={onSaveAssignment}
           />
         </React.Fragment>
       )}
@@ -6916,25 +6906,6 @@ function App() {
     });
   }
 
-  // Qué jugador de la plantilla ocupa cada posición fija (slot) de una jugada, en `matchId`.
-  // Vive en el propio partido (no en la jugada) porque puede variar de partido a partido.
-  function saveSetPieceAssignment(matchId, category, playId, slotAssignments) {
-    const current = dataRef.current.matchesById[matchId];
-    if (!current) return;
-    const updated = {
-      ...current,
-      setPieceAssignments: {
-        ...(current.setPieceAssignments || {}),
-        [category]: {
-          ...((current.setPieceAssignments || {})[category] || {}),
-          [playId]: slotAssignments,
-        },
-      },
-    };
-    commit({ ...dataRef.current, matchesById: { ...dataRef.current.matchesById, [matchId]: updated } });
-    if (matchRef.current && matchRef.current.id === matchId) setMatch(updated);
-  }
-
   // kind: "own" (nuestro escudo) o "rival" (el del equipo `name`)
   async function saveCrest(kind, name, dataUrl) {
     dataUrl = await removeWhiteBackground(dataUrl);
@@ -7347,6 +7318,7 @@ function App() {
             match={match}
             squad={data.squad}
             crests={data.crests}
+            setPiecePositions={data.setPiecePositions || {}}
             onSaveCrest={saveCrest}
             onUpdate={updateMatch}
             onFinish={finishMatch}
@@ -7379,7 +7351,6 @@ function App() {
             squad={data.squad}
             setPiecePositions={data.setPiecePositions || {}}
             onSaveSetPiecePositions={saveSetPiecePositions}
-            onSaveAssignment={saveSetPieceAssignment}
             onBack={goStats}
           />
         )}
