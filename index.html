@@ -261,7 +261,15 @@ const TEAM_CODE_KEY = "rp_team_code";
 const DEVICE_ID_KEY = "rp_device_id";
 
 function emptyData() {
-  return { squad: [], matchesList: [], matchesById: {}, setPiecePositions: {}, crests: emptyCrests(), updatedAt: 0 };
+  return {
+    squad: [],
+    matchesList: [],
+    matchesById: {},
+    setPiecePositions: {},
+    crests: emptyCrests(),
+    ratingConfig: null,
+    updatedAt: 0,
+  };
 }
 
 /* ---------------------------------------------------------
@@ -556,6 +564,7 @@ function loadLocalData() {
       matchesList: parsed.matchesList || [],
       matchesById: parsed.matchesById || {},
       setPiecePositions: migrateSetPiecePositions(parsed.setPiecePositions || {}),
+      ratingConfig: parsed.ratingConfig || null,
       crests: {
         own: (parsed.crests && parsed.crests.own) || null,
         ownNoBg: !!(parsed.crests && parsed.crests.ownNoBg),
@@ -760,6 +769,8 @@ function SyncSettings({
   onRestoreHistory,
   onExportJSON,
   onImportJSON,
+  ratingConfig,
+  onSaveRatingConfig,
   onBack,
 }) {
   const [code, setCode] = useState(teamCode);
@@ -974,6 +985,174 @@ function SyncSettings({
           </div>
         </>
       )}
+
+      <RatingSettings config={ratingConfig} onSave={onSaveRatingConfig} />
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Ajustes → Puntuación de jugadores: tabla editable de pesos por evento y posición,
+   nota base y bonos por resultado. Se edita en un borrador y se guarda con el botón.
+--------------------------------------------------------- */
+function ratingConfigToDraft(config) {
+  const fmt = (v) => (v == null ? "" : v.toFixed(2));
+  const weights = {};
+  RATING_ROWS.forEach(({ key }) => {
+    weights[key] = {};
+    RATING_GROUPS.forEach(({ id }) => { weights[key][id] = fmt(config.weights[key][id]); });
+  });
+  return {
+    base: fmt(config.base),
+    bonusWin: fmt(config.bonusWin),
+    bonusBigWin: fmt(config.bonusBigWin),
+    bonusCleanSheet: fmt(config.bonusCleanSheet),
+    weights,
+  };
+}
+
+function parseRatingNumber(text) {
+  const t = String(text).trim().replace(",", ".");
+  if (t === "") return null;
+  const n = Number(t);
+  return isFinite(n) ? Math.round(n * 100) / 100 : undefined;
+}
+
+function RatingSettings({ config, onSave }) {
+  const [draft, setDraft] = useState(() => ratingConfigToDraft(config));
+  const [error, setError] = useState(null);
+  const savedDraft = ratingConfigToDraft(config);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(savedDraft);
+
+  // Si llega una config nueva (otro dispositivo, restaurar) y no hay cambios a medias, se refleja
+  const configKey = JSON.stringify(config);
+  useEffect(() => {
+    if (!dirty) setDraft(ratingConfigToDraft(config));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configKey]);
+
+  function setField(field, value) {
+    setDraft((d) => ({ ...d, [field]: value }));
+  }
+
+  function setWeight(key, group, value) {
+    setDraft((d) => ({ ...d, weights: { ...d.weights, [key]: { ...d.weights[key], [group]: value } } }));
+  }
+
+  function save() {
+    const scalar = {};
+    for (const f of ["base", "bonusWin", "bonusBigWin", "bonusCleanSheet"]) {
+      const v = parseRatingNumber(draft[f]);
+      if (v == null) return setError("La nota base y los bonos no pueden quedar vacíos.");
+      scalar[f] = v;
+    }
+    const weights = {};
+    for (const { key } of RATING_ROWS) {
+      weights[key] = {};
+      for (const { id } of RATING_GROUPS) {
+        const v = parseRatingNumber(draft.weights[key][id]);
+        if (v === undefined) return setError("Hay algún valor que no es un número.");
+        weights[key][id] = v;
+      }
+    }
+    setError(null);
+    onSave({ ...scalar, weights });
+  }
+
+  function restoreDefaults() {
+    if (!window.confirm("¿Restaurar la tabla de puntuación, la nota base y los bonos a los valores por defecto?")) return;
+    setError(null);
+    setDraft(ratingConfigToDraft(DEFAULT_RATING_CONFIG));
+    onSave(DEFAULT_RATING_CONFIG);
+  }
+
+  const numberInput = (value, onChange, disabled, extraClass = "") => (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={disabled ? "" : value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => {
+        const v = parseRatingNumber(e.target.value);
+        if (v != null) onChange(v.toFixed(2));
+      }}
+      className={`mp-input px-1 py-1 text-center text-xs ${extraClass}`}
+      style={disabled ? { opacity: 0.3 } : undefined}
+    />
+  );
+
+  const scalarRow = (field, label) => (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-sm">{label}</span>
+      {numberInput(draft[field], (v) => setField(field, v), false, "w-20")}
+    </div>
+  );
+
+  return (
+    <div className="mp-card p-3 mt-4">
+      <div className="text-sm font-semibold mb-1">Puntuación de jugadores</div>
+      <div className="text-xs mb-3" style={{ color: "var(--chalk-dim)" }}>
+        Puntos que suma o resta cada evento según la posición del jugador en ese momento. Una celda vacía
+        no suma ni resta. Se guarda con el resto de datos del equipo y se sincroniza entre dispositivos.
+      </div>
+
+      <div className="flex flex-col gap-2 mb-3">
+        {scalarRow("base", "Nota base al empezar el partido")}
+        {scalarRow("bonusWin", "Bono por victoria")}
+        {scalarRow("bonusBigWin", "Bono extra por ganar de 5+ goles")}
+        {scalarRow("bonusCleanSheet", "Bono extra por ganar con portería a cero")}
+      </div>
+
+      <div className="mp-scroll overflow-x-auto -mx-1 px-1">
+        <table className="text-xs w-full" style={{ borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th className="p-1 text-left" style={{ color: "var(--chalk-dim)" }}>Evento</th>
+              {RATING_GROUPS.map((g) => (
+                <th key={g.id} className="p-1 text-center whitespace-nowrap" style={{ color: "var(--chalk-dim)" }}>
+                  {g.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {RATING_ROWS.map((row) => (
+              <tr key={row.key}>
+                <td className="p-1 whitespace-nowrap">{row.label}</td>
+                {RATING_GROUPS.map((g) => (
+                  <td key={g.id} className="p-0.5">
+                    {numberInput(
+                      draft.weights[row.key][g.id],
+                      (v) => setWeight(row.key, g.id, v),
+                      !!row.ptOnly && g.id !== "PT",
+                      "w-14"
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {error && (
+        <div className="text-xs mt-2" style={{ color: "var(--crimson)" }}>{error}</div>
+      )}
+
+      <div className="flex gap-2 mt-3">
+        <button
+          onClick={save}
+          disabled={!dirty}
+          className="mp-btn mp-btn-primary flex-1 py-2 text-sm font-semibold"
+          style={!dirty ? { opacity: 0.5 } : undefined}
+        >
+          {dirty ? "Guardar cambios" : "Guardado"}
+        </button>
+        <button onClick={restoreDefaults} className="mp-btn mp-btn-outline flex-1 py-2 text-sm">
+          Restaurar valores por defecto
+        </button>
+      </div>
     </div>
   );
 }
@@ -1644,7 +1823,8 @@ function SquadManager({ squad, matches, onSave, onBack }) {
 
   useEffect(() => setPlayers(squad), [squad]);
 
-  const seasonRatings = computeSeasonRatings(matches || [], squad);
+  const ratingConfig = React.useContext(RatingConfigContext);
+  const seasonRatings = computeSeasonRatings(matches || [], squad, ratingConfig);
 
   function addPlayer() {
     if (!name.trim()) return;
@@ -2079,6 +2259,7 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
    Pantalla: Partido en directo
 --------------------------------------------------------- */
 function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBack }) {
+  const ratingConfig = React.useContext(RatingConfigContext);
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [subOutId, setSubOutId] = useState(null);
   const [tab, setTab] = useState("jugadores");
@@ -2434,7 +2615,7 @@ function LiveMatch({ match, squad, crests, onSaveCrest, onUpdate, onFinish, onBa
             <PlayerStatsAccordion
               players={[...rosterOnPitch, ...rosterBench].map((id) => playerById(id))}
               events={match.events}
-              ratings={computeMatchRatings(match, squad)}
+              ratings={computeMatchRatings(match, squad, ratingConfig)}
             />
           )}
         </React.Fragment>
@@ -3287,6 +3468,7 @@ function TeamEventsPanel({ match, onUpdate }) {
    Pantalla: Resumen
 --------------------------------------------------------- */
 function MatchSummary({ match, squad, crests, onBack, onExport }) {
+  const ratingConfig = React.useContext(RatingConfigContext);
   const [tab, setTab] = useState("resumen");
   const [showPlayerStats, setShowPlayerStats] = useState(false);
   const [chartsTab, setChartsTab] = useState("jugadores");
@@ -3439,7 +3621,7 @@ function MatchSummary({ match, squad, crests, onBack, onExport }) {
             <PlayerStatsAccordion
               players={rosterPlayers}
               events={match.events}
-              ratings={computeMatchRatings(match, squad)}
+              ratings={computeMatchRatings(match, squad, ratingConfig)}
             />
           )}
         </React.Fragment>
@@ -3748,11 +3930,10 @@ function computePlayerStats(playerId, events) {
 }
 
 /* ---------------------------------------------------------
-   Nota por partido (0-10, base 6.0): cada evento del jugador suma o resta según
+   Nota por partido (0-10, base configurable, 6.0 por defecto): cada evento del jugador suma o resta según
    la posición que ocupaba en el minuto exacto del evento (tramos de `positionHistory`
    que se guardan al moverle en Campo), no según su posición fija de Plantilla.
 --------------------------------------------------------- */
-const RATING_BASE = 6.0;
 const RATING_POSITION_GROUP = {
   PT: "PT",
   DFI: "DEF", DFC: "DEF", DFD: "DEF",
@@ -3761,37 +3942,99 @@ const RATING_POSITION_GROUP = {
   MCO: "MCO",
   DC: "DC",
 };
-// Peso de cada evento por grupo de posición; un grupo sin peso (las "—" de la tabla) no suma ni resta.
-// `all` se aplica igual en cualquier posición (incluso si no se conoce).
-const RATING_WEIGHTS = {
-  gol: { PT: 2.0, DEF: 1.8, CAR: 1.5, MC: 1.5, MCO: 1.4, DC: 1.2 },
-  asistencia: { PT: 1.0, DEF: 1.0, CAR: 1.0, MC: 1.0, MCO: 0.9, DC: 0.9 },
-  remate_puerta: { DEF: 0.3, CAR: 0.25, MC: 0.22, MCO: 0.18, DC: 0.12 },
-  pase_clave: { DEF: 0.35, CAR: 0.18, MC: 0.15, MCO: 0.15, DC: 0.3 },
-  regate: { DEF: 0.3, CAR: 0.14, MC: 0.2, MCO: 0.16, DC: 0.14 },
-  duelo_ganado: { PT: 0.15, DEF: 0.15, CAR: 0.12, MC: 0.12, MCO: 0.08, DC: 0.05 },
-  despeje: { PT: 0.1, DEF: 0.15, CAR: 0.1 },
-  recuperacion: { DEF: 0.1, CAR: 0.1, MC: 0.15, MCO: 0.1, DC: 0.05 },
-  falta_cometida: { all: -0.15 },
-  amarilla: { all: -0.5 },
-  roja: { all: -1.5 },
-  parada: { PT: 0.3 },
-  gol_encajado: { PT: -0.3 },
+const RATING_GROUPS = [
+  { id: "PT", label: "PT" },
+  { id: "DEF", label: "Defensa" },
+  { id: "CAR", label: "Carrilero" },
+  { id: "MC", label: "MC" },
+  { id: "MCO", label: "MCO" },
+  { id: "DC", label: "DC" },
+];
+// Filas de la tabla de pesos. `ptOnly`: solo aplica al portero (celdas de otras posiciones deshabilitadas).
+const RATING_ROWS = [
+  { key: "gol", label: "Gol" },
+  { key: "asistencia", label: "Asistencia" },
+  { key: "remate_puerta", label: "Remate a puerta" },
+  { key: "pase_clave", label: "Pase clave" },
+  { key: "regate", label: "Regate completado" },
+  { key: "duelo_ganado", label: "Duelo ganado" },
+  { key: "despeje", label: "Despeje" },
+  { key: "recuperacion", label: "Recuperación" },
+  { key: "falta_cometida", label: "Falta cometida" },
+  { key: "amarilla", label: "Tarjeta amarilla" },
+  { key: "roja", label: "Tarjeta roja" },
+  { key: "parada", label: "Parada", ptOnly: true },
+  { key: "gol_encajado", label: "Gol encajado", ptOnly: true },
+];
+// Configuración por defecto de la nota. Cada equipo guarda la suya en `data.ratingConfig`
+// (sincronizada con Supabase por código de equipo); null = sin peso (no suma ni resta).
+const DEFAULT_RATING_CONFIG = {
+  base: 6.0,
+  bonusWin: 0.5,
+  bonusBigWin: 1.0,
+  bonusCleanSheet: 1.0,
+  weights: {
+    gol: { PT: 2.0, DEF: 1.8, CAR: 1.5, MC: 1.5, MCO: 1.4, DC: 1.2 },
+    asistencia: { PT: 1.0, DEF: 1.0, CAR: 1.0, MC: 1.0, MCO: 0.9, DC: 0.9 },
+    remate_puerta: { PT: null, DEF: 0.3, CAR: 0.25, MC: 0.22, MCO: 0.18, DC: 0.12 },
+    pase_clave: { PT: null, DEF: 0.35, CAR: 0.18, MC: 0.15, MCO: 0.15, DC: 0.3 },
+    regate: { PT: null, DEF: 0.3, CAR: 0.14, MC: 0.2, MCO: 0.16, DC: 0.14 },
+    duelo_ganado: { PT: 0.15, DEF: 0.15, CAR: 0.12, MC: 0.12, MCO: 0.08, DC: 0.05 },
+    despeje: { PT: 0.1, DEF: 0.15, CAR: 0.1, MC: null, MCO: null, DC: null },
+    recuperacion: { PT: null, DEF: 0.1, CAR: 0.1, MC: 0.15, MCO: 0.1, DC: 0.05 },
+    falta_cometida: { PT: -0.15, DEF: -0.15, CAR: -0.15, MC: -0.15, MCO: -0.15, DC: -0.15 },
+    amarilla: { PT: -0.5, DEF: -0.5, CAR: -0.5, MC: -0.5, MCO: -0.5, DC: -0.5 },
+    roja: { PT: -1.5, DEF: -1.5, CAR: -1.5, MC: -1.5, MCO: -1.5, DC: -1.5 },
+    parada: { PT: 0.3, DEF: null, CAR: null, MC: null, MCO: null, DC: null },
+    gol_encajado: { PT: -0.3, DEF: null, CAR: null, MC: null, MCO: null, DC: null },
+  },
 };
+
+// Completa una config guardada con los valores por defecto que le falten (equipos antiguos
+// sin config, o filas nuevas); respeta los null que el entrenador haya dejado a propósito.
+function normalizeRatingConfig(cfg) {
+  const src = cfg || {};
+  const num = (v, d) => (typeof v === "number" && isFinite(v) ? v : d);
+  const weights = {};
+  RATING_ROWS.forEach(({ key, ptOnly }) => {
+    const def = DEFAULT_RATING_CONFIG.weights[key];
+    const saved = (src.weights && src.weights[key]) || {};
+    weights[key] = {};
+    RATING_GROUPS.forEach(({ id }) => {
+      if (ptOnly && id !== "PT") weights[key][id] = null;
+      else if (id in saved) weights[key][id] = typeof saved[id] === "number" && isFinite(saved[id]) ? saved[id] : null;
+      else weights[key][id] = def[id];
+    });
+  });
+  return {
+    base: num(src.base, DEFAULT_RATING_CONFIG.base),
+    bonusWin: num(src.bonusWin, DEFAULT_RATING_CONFIG.bonusWin),
+    bonusBigWin: num(src.bonusBigWin, DEFAULT_RATING_CONFIG.bonusBigWin),
+    bonusCleanSheet: num(src.bonusCleanSheet, DEFAULT_RATING_CONFIG.bonusCleanSheet),
+    weights,
+  };
+}
+
+// Config de nota del equipo actual, disponible en cualquier pantalla sin pasarla por props
+const RatingConfigContext = React.createContext(normalizeRatingConfig(null));
+
 // Tipos de evento registrados → fila de la tabla de pesos
 function ratingWeightKey(type) {
   if (ALL_GOAL_TYPES.includes(type)) return "gol";
   if (type === "duelo_ganado" || type === "duelo_general_ganado") return "duelo_ganado";
   if (type === "parada_area" || type === "parada_fuera_area" || type === "parada_area_pequena") return "parada";
-  return RATING_WEIGHTS[type] ? type : null;
+  return DEFAULT_RATING_CONFIG.weights[type] ? type : null;
 }
 
-function ratingWeight(key, positionCode) {
-  const row = RATING_WEIGHTS[key];
+// Peso de un evento para una posición. Si no se conoce la posición del jugador, solo cuenta
+// cuando el peso es igual en todas las posiciones (faltas y tarjetas, por defecto).
+function ratingWeight(config, key, positionCode) {
+  const row = config.weights[key];
   if (!row) return 0;
-  if (row.all != null) return row.all;
   const group = RATING_POSITION_GROUP[positionCode];
-  return (group && row[group]) || 0;
+  if (group) return row[group] || 0;
+  const values = RATING_GROUPS.map(({ id }) => row[id]);
+  return values.every((v) => v === values[0]) ? values[0] || 0 : 0;
 }
 
 // Posición que ocupaba un jugador en un minuto dado: el último tramo de `positionHistory`
@@ -3816,19 +4059,19 @@ function matchGoals(match) {
   return { favor, contra };
 }
 
-function matchResultBonus(match) {
+function matchResultBonus(match, config) {
   if (!(match.finished || match.half === "finalizado")) return 0;
   const { favor, contra } = matchGoals(match);
   if (favor <= contra) return 0;
-  let bonus = 0.5;
-  if (favor - contra >= 5) bonus += 1.0;
-  if (contra === 0) bonus += 1.0;
+  let bonus = config.bonusWin;
+  if (favor - contra >= 5) bonus += config.bonusBigWin;
+  if (contra === 0) bonus += config.bonusCleanSheet;
   return bonus;
 }
 
 // Notas de un partido por jugador: { [playerId]: 7.2 } solo para quienes jugaron (titulares
 // y suplentes que entraron), recortadas a 0-10 y redondeadas a un decimal.
-function computeMatchRatings(match, squad) {
+function computeMatchRatings(match, squad, config) {
   const intervals = computeMatchIntervals(match);
   const squadPosition = {};
   (squad || []).forEach((p) => { squadPosition[p.id] = p.position || null; });
@@ -3836,13 +4079,13 @@ function computeMatchRatings(match, squad) {
     positionAtMinute(match, playerId, half, minute, squadPosition[playerId]);
 
   const scores = {};
-  Object.keys(intervals).forEach((id) => { scores[id] = RATING_BASE; });
+  Object.keys(intervals).forEach((id) => { scores[id] = config.base; });
 
   (match.events || []).forEach((e) => {
     if (scores[e.playerId] == null) return;
     const key = ratingWeightKey(e.type);
     if (!key) return;
-    scores[e.playerId] += ratingWeight(key, posAt(e.playerId, e.half, e.minute));
+    scores[e.playerId] += ratingWeight(config, key, posAt(e.playerId, e.half, e.minute));
   });
 
   // Goles encajados antiguos guardados como dato de equipo (sin jugador): restan al que
@@ -3852,13 +4095,13 @@ function computeMatchRatings(match, squad) {
       const { enter, exit } = intervals[id];
       const minute = g.minute != null ? g.minute : exit;
       if (minute < enter || minute > exit) return;
-      scores[id] += ratingWeight("gol_encajado", posAt(id, g.half || 2, minute));
+      scores[id] += ratingWeight(config, "gol_encajado", posAt(id, g.half || 2, minute));
     });
   });
 
   // Bonificaciones por resultado, solo con el partido ya finalizado y si el equipo gana:
-  // +0.5 por ganar, +1.0 más si gana por 5 o más goles, +1.0 más si no encaja ninguno.
-  const bonus = matchResultBonus(match);
+  // por ganar, más si gana por 5 o más goles, y más si no encaja ninguno (valores de la config).
+  const bonus = matchResultBonus(match, config);
   if (bonus > 0) Object.keys(scores).forEach((id) => { scores[id] += bonus; });
 
   const ratings = {};
@@ -3870,12 +4113,12 @@ function computeMatchRatings(match, squad) {
 
 // Nota media de temporada por jugador (media de sus notas en los partidos jugados, sin los
 // programados): { [playerId]: { avg, matches } }, con la media redondeada a un decimal.
-function computeSeasonRatings(matches, squad) {
+function computeSeasonRatings(matches, squad, config) {
   const sums = {};
   matches
     .filter((m) => !m.scheduled)
     .forEach((m) => {
-      const ratings = computeMatchRatings(m, squad);
+      const ratings = computeMatchRatings(m, squad, config);
       Object.keys(ratings).forEach((id) => {
         if (!sums[id]) sums[id] = { total: 0, matches: 0 };
         sums[id].total += ratings[id];
@@ -3911,8 +4154,9 @@ function RatingBadge({ rating, title = "Nota del partido (0-10)" }) {
 
 // Pestaña "Notas" de un partido finalizado: jugadores que participaron, de mayor a menor nota.
 function MatchRatingsList({ match, squad }) {
-  const ratings = computeMatchRatings(match, squad);
-  const bonus = matchResultBonus(match);
+  const ratingConfig = React.useContext(RatingConfigContext);
+  const ratings = computeMatchRatings(match, squad, ratingConfig);
+  const bonus = matchResultBonus(match, ratingConfig);
   const rows = Object.keys(ratings)
     .map((id) => ({ id, player: squad.find((p) => p.id === id), rating: ratings[id] }))
     .filter((r) => r.player)
@@ -3929,7 +4173,7 @@ function MatchRatingsList({ match, squad }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>
-        Nota final (0-10, base 6.0) según eventos y posición
+        Nota final (0-10, base {ratingConfig.base.toFixed(1)}) según eventos y posición
         {bonus > 0 && ` · incluye +${bonus.toFixed(1)} por el resultado`}
       </div>
       {rows.map((r, i) => (
@@ -4550,7 +4794,8 @@ function SeasonPlayerTable({ squad, matches }) {
   const allSeasonEvents = played.flatMap((m) => m.events);
   const minutesByPlayer = computeSeasonMinutesByPlayer(matches);
   const highlights = computeSeasonHighlights(matches, squad);
-  const seasonRatings = computeSeasonRatings(matches, squad);
+  const ratingConfig = React.useContext(RatingConfigContext);
+  const seasonRatings = computeSeasonRatings(matches, squad, ratingConfig);
 
   const rows = squad.map((p) => {
     const s = computePlayerStats(p.id, allSeasonEvents);
@@ -6394,6 +6639,11 @@ function App() {
     commit({ ...dataRef.current, squad: updatedSquad });
   }
 
+  // Pesos de la nota de este equipo: viajan con el resto de datos a Supabase
+  function saveRatingConfig(config) {
+    commit({ ...dataRef.current, ratingConfig: normalizeRatingConfig(config) }, { syncNow: true });
+  }
+
   function saveSetPiecePositions(category, positions) {
     commit({
       ...dataRef.current,
@@ -6694,7 +6944,7 @@ function App() {
 
   function exportCSV() {
     // "nota" = nota final del jugador en el partido (vacía si no llegó a jugar)
-    const ratings = computeMatchRatings(match, data.squad);
+    const ratings = computeMatchRatings(match, data.squad, ratingConfig);
     const noteOf = (playerId) => (ratings[playerId] != null ? ratings[playerId].toFixed(1) : "");
     const rows = [["partido", "fecha", "rival", "parte", "minuto", "dorsal", "jugador", "evento", "nota"]];
     match.events.forEach((e) => {
@@ -6727,6 +6977,7 @@ function App() {
   }
 
   const isTabView = TAB_VIEWS.includes(view);
+  const ratingConfig = normalizeRatingConfig(data.ratingConfig);
   const nextScheduledMatch =
     data.matchesList
       .filter((m) => m.scheduled)
@@ -6734,6 +6985,7 @@ function App() {
   const seasonHighlights = computeSeasonHighlights(Object.values(data.matchesById), data.squad);
 
   return (
+    <RatingConfigContext.Provider value={ratingConfig}>
     <div className="mp-app">
       <GlobalStyles />
       <div style={isTabView ? { paddingBottom: 64 } : undefined}>
@@ -6796,6 +7048,8 @@ function App() {
             onRestoreHistory={restoreFromHistory}
             onExportJSON={exportJSON}
             onImportJSON={importJSON}
+            ratingConfig={ratingConfig}
+            onSaveRatingConfig={saveRatingConfig}
             onBack={goHome}
           />
         )}
@@ -6865,6 +7119,7 @@ function App() {
       </div>
       {isTabView && <BottomNav active={view} onNavigate={setView} />}
     </div>
+    </RatingConfigContext.Provider>
   );
 }
 
