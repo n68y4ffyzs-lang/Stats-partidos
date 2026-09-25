@@ -2927,7 +2927,27 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
             })}
           </div>
 
-          {/* Panel de cambio: los suplentes solo aparecen aquí, al pulsar "Cambiar" */}
+          {/* Banquillo: incluye a los que ya han sido sustituidos, que pueden volver a entrar */}
+          <div className="mt-3 mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Banquillo — pulsa "Cambiar" en un jugador del campo para que entre uno
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {rosterBench.length === 0 && (
+              <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes.</span>
+            )}
+            {[...rosterBench].sort((a, b) => (Number(playerById(a).number) || 0) - (Number(playerById(b).number) || 0)).map((id) => {
+              const p = playerById(id);
+              const wasSubbedOut = match.subs.some((s) => s.outId === id);
+              return (
+                <span key={id} className="mp-card px-2 py-1 text-xs">
+                  {p.number} · {p.name}
+                  {wasSubbedOut && <span style={{ color: "var(--chalk-dim)" }}> ↩</span>}
+                </span>
+              );
+            })}
+          </div>
+
+          {/* Panel de cambio: los suplentes (y los ya sustituidos) aparecen aquí, al pulsar "Cambiar" */}
           {subOutId && (
             <div className="mp-card p-3 mt-3">
               <div className="text-sm mb-2">
@@ -2936,13 +2956,15 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
               <div className="flex flex-wrap gap-2 mb-2">
                 {rosterBench.map((id) => {
                   const p = playerById(id);
+                  const wasSubbedOut = match.subs.some((s) => s.outId === id);
                   return (
                     <button
                       key={id}
                       onClick={() => confirmSub(id)}
                       className="mp-btn px-3 py-2 text-sm"
+                      title={wasSubbedOut ? "Ya jugó: vuelve a entrar" : undefined}
                     >
-                      {p.number} · {p.name}
+                      {p.number} · {p.name}{wasSubbedOut ? " ↩" : ""}
                     </button>
                   );
                 })}
@@ -4054,9 +4076,10 @@ function SeasonTeamStats({ matches }) {
   );
 }
 
-// Tramo que cada jugador pasó en el campo en un partido concreto ({ enter, exit } en minutos):
-// reconstruye el once inicial deshaciendo los cambios en orden inverso desde el `onPitch` final,
-// y cuenta desde su entrada (0 si fue titular) hasta su salida (o el final del partido).
+// Tramos que cada jugador pasó en el campo en un partido concreto ([{ enter, exit }, ...] en
+// minutos): reconstruye el once inicial deshaciendo los cambios en orden inverso desde el
+// `onPitch` final y recorre los cambios en orden. Un jugador sustituido puede volver a entrar
+// más tarde, así que puede tener varios tramos.
 function computeMatchIntervals(match) {
   const totalMinutes =
     Math.round(((match.clock.half1Elapsed || 0) + (match.clock.half2Elapsed || 0)) / 60) ||
@@ -4069,30 +4092,28 @@ function computeMatchIntervals(match) {
     starters.add(s.outId);
   });
 
-  const enterMinute = {};
-  const exitMinute = {};
-  starters.forEach((id) => { enterMinute[id] = 0; });
-  subsSorted.forEach((s) => {
-    exitMinute[s.outId] = s.minute;
-    enterMinute[s.inId] = s.minute;
-  });
-
   const intervals = {};
-  const participants = new Set([...starters, ...subsSorted.map((s) => s.inId)]);
-  participants.forEach((id) => {
-    const enter = enterMinute[id] != null ? enterMinute[id] : 0;
-    const exit = exitMinute[id] != null ? exitMinute[id] : totalMinutes;
-    intervals[id] = { enter, exit };
+  const open = {};
+  starters.forEach((id) => { open[id] = 0; });
+  subsSorted.forEach((s) => {
+    if (open[s.outId] != null) {
+      (intervals[s.outId] = intervals[s.outId] || []).push({ enter: open[s.outId], exit: s.minute });
+      delete open[s.outId];
+    }
+    open[s.inId] = s.minute;
+  });
+  Object.keys(open).forEach((id) => {
+    (intervals[id] = intervals[id] || []).push({ enter: open[id], exit: Math.max(open[id], totalMinutes) });
   });
   return intervals;
 }
 
-// Minutos jugados por cada jugador en un partido concreto (duración de su tramo en el campo).
+// Minutos jugados por cada jugador en un partido concreto (suma de sus tramos en el campo).
 function computeMatchMinutes(match) {
   const intervals = computeMatchIntervals(match);
   const minutesByPlayer = {};
   Object.keys(intervals).forEach((id) => {
-    minutesByPlayer[id] = Math.max(0, intervals[id].exit - intervals[id].enter);
+    minutesByPlayer[id] = intervals[id].reduce((sum, t) => sum + Math.max(0, t.exit - t.enter), 0);
   });
   return minutesByPlayer;
 }
@@ -4363,9 +4384,9 @@ function computeMatchRatings(match, squad, config) {
   // estaba de PT en el campo en ese minuto.
   (match.concededSetPieces || []).forEach((g) => {
     Object.keys(intervals).forEach((id) => {
-      const { enter, exit } = intervals[id];
-      const minute = g.minute != null ? g.minute : exit;
-      if (minute < enter || minute > exit) return;
+      const stints = intervals[id];
+      const minute = g.minute != null ? g.minute : stints[stints.length - 1].exit;
+      if (!stints.some((t) => minute >= t.enter && minute <= t.exit)) return;
       scores[id] += ratingWeight(config, "gol_encajado", posAt(id, g.half || 2, minute));
     });
   });
