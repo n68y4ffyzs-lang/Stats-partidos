@@ -18,6 +18,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
 
 <style>
   html, body { margin: 0; padding: 0; background: #16241C; }
@@ -231,17 +233,29 @@ function formatClock(totalSeconds) {
 
 // Cálculo puro del tiempo transcurrido y el minuto a partir del propio match,
 // sin depender de referencias locales que puedan quedarse desactualizadas entre componentes.
+// Duración de cada parte en segundos, la que se puso al crear el partido (sin límite si falta)
+function halfLimitSeconds(match) {
+  return (Number(match.halfLength) || 0) * 60 || Infinity;
+}
+
+// El cronómetro de cada parte nunca pasa de su duración: al llegar, se queda clavado ahí.
 function computeElapsed(match) {
   const key = match.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
-  if (!match.clock.running) return match.clock[key];
+  const base = match.clock[key] || 0;
+  if (!match.clock.running) return Math.min(base, halfLimitSeconds(match));
   const startedAt = match.clock.runStartedAt || Date.now();
-  return match.clock[key] + Math.floor((Date.now() - startedAt) / 1000);
+  return Math.min(base + Math.floor((Date.now() - startedAt) / 1000), halfLimitSeconds(match));
+}
+
+function isHalfTimeUp(match) {
+  return computeElapsed(match) >= halfLimitSeconds(match);
 }
 
 function computeMinute(match) {
   const secs = computeElapsed(match);
-  if (match.clock.activeHalf === 1) return Math.floor(secs / 60) + 1;
-  return match.halfLength + Math.floor(secs / 60) + 1;
+  const inHalf = Math.min(Math.floor(secs / 60) + 1, Number(match.halfLength) || Infinity);
+  if (match.clock.activeHalf === 1) return inHalf;
+  return match.halfLength + inHalf;
 }
 
 function halfLabel(match) {
@@ -2679,11 +2693,23 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
     return computeMinute(match);
   }
 
-  // Refresca la pantalla cada segundo sin escribir en almacenamiento ni red
+  // Refresca la pantalla cada segundo sin escribir en almacenamiento ni red. Al cumplirse la
+  // duración de la parte, para el cronómetro solo (también si la app estuvo cerrada mientras).
   useEffect(() => {
     if (!match.clock.running) return;
-    const interval = setInterval(() => forceTick((t) => t + 1), 1000);
+    function tick() {
+      const m = matchRef.current;
+      if (m.clock.running && isHalfTimeUp(m)) {
+        const key = m.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
+        onUpdate({ ...m, clock: { ...m.clock, [key]: halfLimitSeconds(m), running: false } }, true);
+        return;
+      }
+      forceTick((t) => t + 1);
+    }
+    tick();
+    const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match.clock.running]);
 
   // Persiste el cronómetro cada pocos segundos, sin bloquear el tap del usuario.
@@ -2704,6 +2730,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
 
   function toggleRunning() {
     const willRun = !match.clock.running;
+    if (willRun && isHalfTimeUp(match)) return; // la parte ya duró lo que tenía que durar
     onUpdate(
       {
         ...match,
@@ -2903,9 +2930,10 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
             {(match.half === 1 || match.half === 2) && (
               <button
                 onClick={toggleRunning}
-                className="mp-btn mp-btn-primary px-3 py-2 text-xs font-semibold"
+                disabled={!match.clock.running && isHalfTimeUp(match)}
+                className="mp-btn mp-btn-primary px-3 py-2 text-xs font-semibold disabled:opacity-40"
               >
-                {match.clock.running ? "Pausar" : "Reanudar"}
+                {match.clock.running ? "Pausar" : isHalfTimeUp(match) ? `Tiempo cumplido (${match.halfLength}')` : "Reanudar"}
               </button>
             )}
             {(match.half === 1 || match.half === 2) && (
@@ -3980,6 +4008,8 @@ function MatchSummary({ match, squad, crests, onBack, onExport }) {
             Descargar CSV del partido
           </button>
 
+          <MatchPdfPanel match={match} squad={squad} />
+
           <UncalledList match={match} squad={squad} />
 
           {rows.length === 0 ? (
@@ -4535,6 +4565,238 @@ function computeMatchRatings(match, squad, config) {
     ratings[id] = Math.round(Math.min(10, Math.max(0, scores[id])) * 10) / 10;
   });
   return ratings;
+}
+
+/* ---------------------------------------------------------
+   Informe PDF del partido (jsPDF + autotable)
+   Con `onlyPlayerId` sale el informe de un solo jugador (para mandárselo a él); sin él, una
+   primera página con la tabla del equipo y después una página por cada jugador que jugó.
+--------------------------------------------------------- */
+function pdfSafe(text) {
+  // Las fuentes estándar de jsPDF no tienen algunos signos tipográficos
+  return String(text == null ? "" : text).replace(/[–—]/g, "-").replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+}
+
+function pdfFileSlug(text) {
+  return String(text || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
+}
+
+function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const GREEN = [22, 36, 28];
+  const TURF = [127, 191, 106];
+  const ratings = computeMatchRatings(match, squad, ratingConfig);
+  const minutes = computeMatchMinutes(match);
+  const { favor, contra } = matchGoals(match);
+  const result = `${favor} - ${contra}`;
+  const subtitle = pdfSafe(`vs ${match.opponent} · ${match.date} · Resultado: ${result}`);
+  const rosterIds = [...new Set([...(match.onPitch || []), ...(match.bench || [])])];
+  const players = rosterIds
+    .map((id) => squad.find((p) => p.id === id))
+    .filter(Boolean)
+    .sort((a, b) => Number(a.number) - Number(b.number));
+  const played = players.filter((p) => ratings[p.id] != null);
+  const pct = (v) => (v === null ? "-" : `${v}%`);
+  const fmtRating = (r) => (r == null ? "No jugó" : r.toFixed(1));
+
+  function header(title) {
+    doc.setFillColor(...GREEN);
+    doc.rect(0, 0, 210, 26, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text(pdfSafe(title), 14, 12);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(subtitle, 14, 20);
+    doc.setTextColor(0, 0, 0);
+  }
+
+  function playerPage(p) {
+    header(`#${p.number} ${p.name}`);
+    const rating = ratings[p.id];
+    const st = computePlayerStats(p.id, match.events || []);
+    const isGk = GOALKEEPER_NUMBERS.includes(String(p.number));
+
+    // Nota y minutos, grandes
+    doc.setDrawColor(...TURF);
+    doc.setLineWidth(0.8);
+    doc.roundedRect(14, 32, 56, 26, 3, 3);
+    doc.roundedRect(76, 32, 56, 26, 3, 3);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text("NOTA", 42, 38, { align: "center" });
+    doc.text("MINUTOS", 104, 38, { align: "center" });
+    doc.setTextColor(0, 0, 0);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(22);
+    doc.text(fmtRating(rating), 42, 52, { align: "center" });
+    doc.text(`${minutes[p.id] || 0}'`, 104, 52, { align: "center" });
+    doc.setFont("helvetica", "normal");
+
+    const key = [
+      ["Goles", st.goles],
+      ["Asistencias", st.asistencias],
+      ["Tiros (a puerta / total)", `${st.tirosPuerta} / ${st.tirosTotales}`],
+      ["Duelos ganados", `${pct(st.duelosPct)} (${st.duelosGanados} de ${st.duelosTotales})`],
+      ["Regates acertados", `${pct(st.regatesPct)} (${st.regatesOk} de ${st.regatesTotales})`],
+      ["Despejes", `${pct(st.despejesPct)} (${st.despejes} de ${st.despejesTotales})`],
+      ["Recuperaciones", st.robos],
+      ["Pérdidas", st.perdidas],
+      ["Tarjetas (amarilla / roja)", `${st.amarillas} / ${st.rojas}`],
+    ];
+    if (isGk) key.push(["Paradas", st.paradas], ["Goles encajados", st.golesEncajados]);
+    doc.autoTable({
+      startY: 66,
+      head: [["Resumen", ""]],
+      body: key.map(([k, v]) => [pdfSafe(k), pdfSafe(v)]),
+      theme: "striped",
+      headStyles: { fillColor: GREEN },
+      columnStyles: { 1: { halign: "right", fontStyle: "bold" } },
+      margin: { left: 14, right: 14 },
+    });
+
+    // Detalle: cada acción registrada, agrupada como en la app
+    const own = (match.events || []).filter((e) => e.playerId === p.id);
+    const detail = EVENT_TYPES.map((ev) => [ev, own.filter((e) => e.type === ev.id).length])
+      .filter(([, n]) => n > 0)
+      .map(([ev, n]) => [pdfSafe((GROUP_META[ev.group] || {}).label || ""), pdfSafe(ev.label), n]);
+    doc.autoTable({
+      startY: doc.lastAutoTable.finalY + 8,
+      head: [["Grupo", "Acción", "Veces"]],
+      body: detail.length ? detail : [["", "Sin acciones registradas", ""]],
+      theme: "grid",
+      headStyles: { fillColor: GREEN },
+      columnStyles: { 2: { halign: "right" } },
+      margin: { left: 14, right: 14 },
+    });
+  }
+
+  if (onlyPlayerId) {
+    const p = players.find((pl) => pl.id === onlyPlayerId);
+    if (p) playerPage(p);
+  } else {
+    header("Informe del partido");
+    doc.autoTable({
+      startY: 34,
+      head: [["#", "Jugador", "Min", "Nota", "Goles", "Asist.", "Tiros", "Duelos", "Regates", "Recup.", "Pérd."]],
+      body: players.map((p) => {
+        const st = computePlayerStats(p.id, match.events || []);
+        return [
+          p.number,
+          pdfSafe(p.name),
+          ratings[p.id] != null ? `${minutes[p.id] || 0}'` : "-",
+          fmtRating(ratings[p.id]),
+          st.goles,
+          st.asistencias,
+          `${st.tirosPuerta}/${st.tirosTotales}`,
+          pct(st.duelosPct),
+          pct(st.regatesPct),
+          st.robos,
+          st.perdidas,
+        ];
+      }),
+      theme: "striped",
+      headStyles: { fillColor: GREEN, fontSize: 8 },
+      styles: { fontSize: 8 },
+      columnStyles: { 3: { fontStyle: "bold" } },
+      margin: { left: 10, right: 10 },
+    });
+    played.forEach((p) => {
+      doc.addPage();
+      playerPage(p);
+    });
+  }
+
+  // Pie con número de página
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(140, 140, 140);
+    doc.text(`Statix · ${i}/${pages}`, 196, 290, { align: "right" });
+  }
+
+  const who = onlyPlayerId ? `_${pdfFileSlug((players.find((pl) => pl.id === onlyPlayerId) || {}).name)}` : "";
+  const filename = `statix_${pdfFileSlug(match.opponent)}_${pdfFileSlug(match.date)}${who}.pdf`;
+  return { doc, filename };
+}
+
+// En iPad/iPhone abre el menú de compartir (WhatsApp, Mail...) con el PDF; si el navegador no
+// permite compartir archivos, lo descarga.
+async function shareOrDownloadPdf(doc, filename) {
+  const blob = doc.output("blob");
+  const file = typeof File !== "undefined" ? new File([blob], filename, { type: "application/pdf" }) : null;
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // el usuario cerró el menú
+    }
+  }
+  doc.save(filename);
+}
+
+function MatchPdfPanel({ match, squad }) {
+  const ratingConfig = React.useContext(RatingConfigContext);
+  const [busy, setBusy] = useState(false);
+  const ratings = computeMatchRatings(match, squad, ratingConfig);
+  const playedPlayers = [...new Set([...(match.onPitch || []), ...(match.bench || [])])]
+    .map((id) => squad.find((p) => p.id === id))
+    .filter((p) => p && ratings[p.id] != null)
+    .sort((a, b) => Number(a.number) - Number(b.number));
+
+  async function generate(playerId) {
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+      window.alert("No se ha podido cargar el generador de PDF. Abre la app una vez con conexión y vuelve a probar.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { doc, filename } = buildMatchReportPdf(match, squad, ratingConfig, playerId);
+      await shareOrDownloadPdf(doc, filename);
+    } catch (e) {
+      console.error("Error generando el PDF", e);
+      window.alert("No se pudo generar el PDF.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mp-card p-3 mb-5">
+      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--chalk-dim)" }}>
+        Informe PDF con estadísticas y nota
+      </div>
+      <button
+        onClick={() => generate(null)}
+        disabled={busy}
+        className="mp-btn mp-btn-primary w-full py-2.5 text-sm font-semibold mb-3 disabled:opacity-40"
+      >
+        PDF de todo el equipo
+      </button>
+      <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>O uno para cada jugador:</div>
+      <div className="flex flex-wrap gap-2">
+        {playedPlayers.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => generate(p.id)}
+            disabled={busy}
+            className="mp-btn mp-btn-outline px-3 py-2 text-xs disabled:opacity-40"
+          >
+            {p.number} · {p.name} ({ratings[p.id].toFixed(1)})
+          </button>
+        ))}
+        {playedPlayers.length === 0 && (
+          <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>Ningún jugador tiene minutos en este partido.</span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // Nota media de temporada por jugador (media de sus notas en los partidos jugados, sin los

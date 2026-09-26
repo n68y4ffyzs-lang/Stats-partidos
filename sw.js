@@ -12,7 +12,7 @@
 // Si se añade algún archivo nuevo que la app necesite para arrancar, añádelo a PRECACHE y
 // sube VERSION para que se descargue en la siguiente visita con conexión.
 
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = `statix-${VERSION}`;
 const NAV_TIMEOUT_MS = 4000;
 
@@ -27,6 +27,8 @@ const PRECACHE = [
   "https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js",
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
   "https://cdn.tailwindcss.com/3.4.17",
+  "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
+  "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js",
 ];
 
 const RUNTIME_HOSTS = ["cdn.jsdelivr.net", "cdn.tailwindcss.com", "fonts.googleapis.com", "fonts.gstatic.com"];
