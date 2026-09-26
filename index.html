@@ -4008,7 +4008,7 @@ function MatchSummary({ match, squad, crests, onBack, onExport }) {
             Descargar CSV del partido
           </button>
 
-          <MatchPdfPanel match={match} squad={squad} />
+          <MatchPdfPanel match={match} squad={squad} crests={crests} />
 
           <UncalledList match={match} squad={squad} />
 
@@ -4244,11 +4244,21 @@ function SeasonTeamStats({ matches }) {
 // minutos): reconstruye el once inicial deshaciendo los cambios en orden inverso desde el
 // `onPitch` final y recorre los cambios en orden. Un jugador sustituido puede volver a entrar
 // más tarde, así que puede tener varios tramos.
+// Partidos jugados antes de limitar el cronómetro pueden tener partes más largas de lo fijado
+// (el reloj siguió corriendo): aquí cada parte cuenta como mucho su duración y los minutos de
+// los cambios se ajustan dentro de su parte, así que nadie suma más minutos que el partido.
 function computeMatchIntervals(match) {
+  const L = Number(match.halfLength) || 0;
+  const halfSecs = (v) => (L ? Math.min(v || 0, L * 60) : v || 0);
   const totalMinutes =
-    Math.round(((match.clock.half1Elapsed || 0) + (match.clock.half2Elapsed || 0)) / 60) ||
-    (match.halfLength || 0) * 2;
-  const subsSorted = [...(match.subs || [])].sort((a, b) => a.half - b.half || a.minute - b.minute);
+    Math.round((halfSecs(match.clock.half1Elapsed) + halfSecs(match.clock.half2Elapsed)) / 60) || L * 2;
+  const clampMinute = (half, minute) => {
+    if (!L) return minute;
+    return half === 1 ? Math.min(minute, L) : Math.min(Math.max(minute, L), 2 * L);
+  };
+  const subsSorted = [...(match.subs || [])]
+    .map((s) => ({ ...s, minute: clampMinute(s.half, s.minute) }))
+    .sort((a, b) => a.half - b.half || a.minute - b.minute);
 
   const starters = new Set(match.onPitch || []);
   [...subsSorted].reverse().forEach((s) => {
@@ -4583,7 +4593,7 @@ function pdfFileSlug(text) {
     .replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
 }
 
-function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId) {
+function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId, ownCrest) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const GREEN = [22, 36, 28];
@@ -4602,9 +4612,23 @@ function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId) {
   const pct = (v) => (v === null ? "-" : `${v}%`);
   const fmtRating = (r) => (r == null ? "No jugó" : r.toFixed(1));
 
+  // Escudo de nuestro equipo (el que se elige en Inicio), arriba a la derecha de cada página
+  let crest = null;
+  if (ownCrest && /^data:image\/(png|jpe?g)/i.test(ownCrest)) {
+    try {
+      const props = doc.getImageProperties(ownCrest);
+      const h = 20;
+      const w = Math.min(30, (props.width / props.height) * h);
+      crest = { src: ownCrest, format: /png/i.test(ownCrest.slice(0, 20)) ? "PNG" : "JPEG", w, h: (w / props.width) * props.height };
+    } catch (e) {
+      crest = null;
+    }
+  }
+
   function header(title) {
     doc.setFillColor(...GREEN);
     doc.rect(0, 0, 210, 26, "F");
+    if (crest) doc.addImage(crest.src, crest.format, 210 - 10 - crest.w, (26 - crest.h) / 2, crest.w, crest.h);
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(16);
@@ -4741,7 +4765,7 @@ async function shareOrDownloadPdf(doc, filename) {
   doc.save(filename);
 }
 
-function MatchPdfPanel({ match, squad }) {
+function MatchPdfPanel({ match, squad, crests }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [busy, setBusy] = useState(false);
   const ratings = computeMatchRatings(match, squad, ratingConfig);
@@ -4757,7 +4781,7 @@ function MatchPdfPanel({ match, squad }) {
     }
     setBusy(true);
     try {
-      const { doc, filename } = buildMatchReportPdf(match, squad, ratingConfig, playerId);
+      const { doc, filename } = buildMatchReportPdf(match, squad, ratingConfig, playerId, crests && crests.own);
       await shareOrDownloadPdf(doc, filename);
     } catch (e) {
       console.error("Error generando el PDF", e);
