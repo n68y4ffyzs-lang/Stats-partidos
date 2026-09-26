@@ -17,7 +17,7 @@
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
 
 <style>
   html, body { margin: 0; padding: 0; background: #16241C; }
@@ -25,6 +25,21 @@
 </head>
 <body>
 <div id="root"></div>
+
+<script>
+  // Service Worker: guarda la app para poder abrirla sin conexión (ver sw.js).
+  // Busca versiones nuevas al arrancar, al recuperar conexión y al volver a la app; una versión
+  // nueva se aplica la próxima vez que se abra la app, sin cortar lo que se esté haciendo.
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js").then(function (reg) {
+        function check() { if (navigator.onLine) reg.update().catch(function () {}); }
+        window.addEventListener("online", check);
+        document.addEventListener("visibilitychange", function () { if (!document.hidden) check(); });
+      }).catch(function (e) { console.error("Error registrando el Service Worker", e); });
+    });
+  }
+</script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useCallback } = React;
@@ -259,6 +274,8 @@ function venueLabel(m) {
 const DATA_KEY = "rp_data_v1";
 const TEAM_CODE_KEY = "rp_team_code";
 const DEVICE_ID_KEY = "rp_device_id";
+const PENDING_KEY = "rp_pending_sync";
+const LAST_REMOTE_KEY = "rp_last_remote_updated_at";
 
 function emptyData() {
   return {
@@ -605,6 +622,96 @@ function setStoredTeamCode(code) {
 }
 
 /* ---------------------------------------------------------
+   Cola de cambios pendientes de subir a Supabase
+   Cada cambio guardado en local añade una entrada { id, at, keys, matchIds, silent } con qué
+   partes de los datos tocó (claves de primer nivel y partidos). No guarda copias completas
+   (llenarían el almacenamiento del iPad): como los datos son un único documento, subir el
+   estado actual ya incluye todos los cambios de la cola en el orden en que ocurrieron. Las
+   entradas se borran solo cuando la subida que las incluye se confirma, así que un corte a
+   mitad no pierde nada, y reintentar es seguro porque la subida sustituye el documento.
+   Las marcas de qué se tocó sirven para fusionar si otro dispositivo cambió la nube mientras
+   tanto (ver mergePendingIntoRemote).
+--------------------------------------------------------- */
+function loadPending() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PENDING_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function savePending(entries) {
+  try {
+    if (entries.length) localStorage.setItem(PENDING_KEY, JSON.stringify(entries));
+    else localStorage.removeItem(PENDING_KEY);
+  } catch (e) {
+    console.error("Error guardando la cola de sincronización", e);
+  }
+}
+
+// updated_at de la nube la última vez que este dispositivo quedó al día con ella
+function getLastRemoteUpdatedAt() {
+  return Number(localStorage.getItem(LAST_REMOTE_KEY)) || 0;
+}
+
+function setLastRemoteUpdatedAt(ts) {
+  try {
+    localStorage.setItem(LAST_REMOTE_KEY, String(ts || 0));
+  } catch (e) {
+    /* no crítico */
+  }
+}
+
+// Qué ha cambiado entre dos versiones de los datos (comparando referencias: las
+// actualizaciones son inmutables, así que lo que no se tocó conserva la misma referencia).
+function diffDataForQueue(prev, next) {
+  const keys = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);
+  keys.delete("updatedAt");
+  const changedKeys = [...keys].filter((k) => (prev || {})[k] !== (next || {})[k]);
+  const prevById = (prev && prev.matchesById) || {};
+  const nextById = (next && next.matchesById) || {};
+  const matchIds = [...new Set([...Object.keys(prevById), ...Object.keys(nextById)])].filter(
+    (id) => prevById[id] !== nextById[id]
+  );
+  return { keys: changedKeys, matchIds };
+}
+
+// Otro dispositivo cambió la nube mientras este tenía cambios sin subir: parte de lo que hay
+// en la nube y encima pone lo que este dispositivo cambió (partidos concretos y secciones
+// enteras como la plantilla), para no pisar lo del otro ni perder lo de este.
+function mergePendingIntoRemote(remote, local, pending) {
+  const keys = new Set();
+  const matchIds = new Set();
+  pending.forEach((e) => {
+    (e.keys || []).forEach((k) => keys.add(k));
+    (e.matchIds || []).forEach((id) => matchIds.add(id));
+  });
+  const merged = { ...emptyData(), ...remote };
+  keys.forEach((k) => {
+    if (k !== "matchesById" && k !== "matchesList") merged[k] = local[k];
+  });
+  const byId = { ...(remote.matchesById || {}) };
+  let list = [...(remote.matchesList || [])];
+  matchIds.forEach((id) => {
+    const localMatch = (local.matchesById || {})[id];
+    const localEntry = (local.matchesList || []).find((m) => m.id === id);
+    if (localMatch) byId[id] = localMatch;
+    else delete byId[id];
+    const idx = list.findIndex((m) => m.id === id);
+    if (localEntry) {
+      if (idx >= 0) list[idx] = localEntry;
+      else list.push(localEntry);
+    } else if (!localMatch && idx >= 0) {
+      list.splice(idx, 1);
+    }
+  });
+  merged.matchesById = byId;
+  merged.matchesList = list;
+  return merged;
+}
+
+/* ---------------------------------------------------------
    Estilos compartidos
 --------------------------------------------------------- */
 function GlobalStyles() {
@@ -734,8 +841,33 @@ const SYNC_META = {
   blocked: { color: "var(--amber)", label: "Sincronización cancelada (revisa)" },
 };
 
+// Lo que enseña el indicador: sin conexión manda sobre todo lo demás, luego los cambios
+// pendientes de subir y, si no queda nada, el estado normal ("Sincronizado", error...).
+function syncDisplay(status, online, pendingCount) {
+  if (status === "unconfigured" || status === "no-code") return SYNC_META[status];
+  const plural = pendingCount === 1 ? "" : "s";
+  if (!online) {
+    return {
+      color: "var(--amber)",
+      label: pendingCount > 0
+        ? `Sin conexión — guardando en local (${pendingCount} pendiente${plural})`
+        : "Sin conexión — guardando en local",
+    };
+  }
+  if (status === "blocked") return SYNC_META.blocked;
+  if (pendingCount > 0) {
+    return {
+      color: status === "syncing" ? "var(--cielo)" : "var(--amber)",
+      label: status === "syncing"
+        ? `Subiendo ${pendingCount} cambio${plural}…`
+        : `${pendingCount} cambio${plural} pendiente${plural} de subir`,
+    };
+  }
+  return SYNC_META[status] || SYNC_META.unconfigured;
+}
+
 function SyncBadge({ status, onClick }) {
-  const meta = SYNC_META[status] || SYNC_META.unconfigured;
+  const meta = typeof status === "object" && status ? status : SYNC_META[status] || SYNC_META.unconfigured;
   return (
     <button
       onClick={onClick}
@@ -753,6 +885,7 @@ function SyncBadge({ status, onClick }) {
 --------------------------------------------------------- */
 function SyncSettings({
   status,
+  display,
   teamCode,
   lastSyncedAt,
   supabaseUrl,
@@ -800,8 +933,8 @@ function SyncSettings({
 
       <div className="mp-card p-3 mb-4">
         <div className="flex items-center gap-2 mb-1">
-          <span className="mp-dot" style={{ background: (SYNC_META[status] || SYNC_META.unconfigured).color }} />
-          <span className="text-sm">{(SYNC_META[status] || SYNC_META.unconfigured).label}</span>
+          <span className="mp-dot" style={{ background: display.color }} />
+          <span className="text-sm">{display.label}</span>
         </div>
         {lastSyncedAt ? (
           <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
@@ -2514,7 +2647,7 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
 /* ---------------------------------------------------------
    Pantalla: Partido en directo
 --------------------------------------------------------- */
-function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpdate, onFinish, onBack }) {
+function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpdate, onFinish, onBack, syncView }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [subOutId, setSubOutId] = useState(null);
@@ -2756,6 +2889,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
             <div className="font-semibold leading-tight">vs {match.opponent}</div>
             <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{match.date}</div>
           </div>
+          {syncView && <SyncBadge status={syncView} />}
         </div>
 
         <div className="mp-card px-4 py-2 flex items-center gap-4">
@@ -6569,6 +6703,13 @@ function App() {
   const matchRef = useRef(match);
   const pushTimerRef = useRef(null);
   const supabaseRef = useRef(null);
+  const pendingRef = useRef(loadPending());
+  const [pendingCount, setPendingCount] = useState(pendingRef.current.length);
+  const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  const flushingRef = useRef(false);
+  const flushAgainRef = useRef(false);
+  const retryTimerRef = useRef(null);
+  const retryAttemptRef = useRef(0);
   const deviceId = useRef(getDeviceId()).current;
 
   useEffect(() => { dataRef.current = data; }, [data]);
@@ -6599,8 +6740,13 @@ function App() {
   // ya estaban guardados allí (p.ej. un dispositivo con datos desactualizados). Si detecta que
   // se perdería información pide confirmación explícita en vez de sobrescribir sin más.
   // `opts.force` salta esta comprobación (usado al restaurar una copia o al forzar la subida).
+  // Devuelve "ok", "blocked" (el usuario canceló el aviso) o "error". Si sube bien, borra de la
+  // cola los cambios que ya iban incluidos en `stamped` (los hechos durante la subida se quedan).
   async function pushToSupabase(stamped, opts = {}) {
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !teamCodeRef.current) return "error";
+    const coveredIds = new Set(
+      pendingRef.current.filter((e) => e.at <= stamped.updatedAt).map((e) => e.id)
+    );
     setSyncStatus("syncing");
     try {
       if (!opts.force) {
@@ -6626,7 +6772,7 @@ function App() {
             );
             if (!proceed) {
               setSyncStatus("blocked");
-              return;
+              return "blocked";
             }
           }
         }
@@ -6645,26 +6791,136 @@ function App() {
         .then(({ error: histError }) => {
           if (histError) console.error("Error guardando histórico", histError);
         });
+      setLastRemoteUpdatedAt(stamped.updatedAt);
+      removePending(coveredIds);
       setSyncStatus("synced");
       setLastSyncedAt(Date.now());
+      return "ok";
     } catch (e) {
       console.error("Error sincronizando con Supabase", e);
-      setSyncStatus("error");
+      setSyncStatus(navigator.onLine ? "error" : "offline");
+      return "error";
     }
   }
 
-  function scheduleSync(stamped, immediate) {
+  /* --- Cola de cambios pendientes --- */
+
+  function setPending(entries) {
+    pendingRef.current = entries;
+    savePending(entries);
+    setPendingCount(entries.length);
+  }
+
+  function removePending(ids) {
+    if (!ids || ids.size === 0) return;
+    setPending(pendingRef.current.filter((e) => !ids.has(e.id)));
+  }
+
+  // Apunta un cambio local en la cola. Los guardados automáticos del cronómetro (silent) se
+  // agrupan en una sola entrada mientras no haya otro cambio entre medias, para que el
+  // contador de pendientes refleje acciones reales y no un tic cada 5 segundos.
+  function enqueueChange(prev, next, silent) {
     if (!supabaseRef.current || !teamCodeRef.current) return;
-    if (pushTimerRef.current) {
-      clearTimeout(pushTimerRef.current);
-      pushTimerRef.current = null;
+    const { keys, matchIds } = diffDataForQueue(prev, next);
+    if (keys.length === 0 && matchIds.length === 0) return;
+    const entries = pendingRef.current;
+    const last = entries[entries.length - 1];
+    if (
+      silent && last && last.silent &&
+      keys.join() === (last.keys || []).join() && matchIds.join() === (last.matchIds || []).join()
+    ) {
+      setPending([...entries.slice(0, -1), { ...last, at: next.updatedAt }]);
+      return;
     }
-    if (immediate) {
-      pushToSupabase(stamped);
-    } else {
-      pushTimerRef.current = setTimeout(() => {
-        pushToSupabase(dataRef.current);
-      }, 1500);
+    setPending([...entries, { id: genId(), at: next.updatedAt, keys, matchIds, silent: !!silent }]);
+  }
+
+  function scheduleFlush(delay) {
+    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    pushTimerRef.current = setTimeout(() => {
+      pushTimerRef.current = null;
+      flushQueue();
+    }, delay);
+  }
+
+  function scheduleRetry() {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    const attempt = retryAttemptRef.current++;
+    const delay = Math.min(60000, 5000 * Math.pow(2, attempt)); // 5 s, 10 s, 20 s, 40 s, 60 s...
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      flushQueue();
+    }, delay);
+  }
+
+  // Sube a Supabase todo lo pendiente. Si la nube cambió desde la última vez que este
+  // dispositivo estuvo al día (otro dispositivo guardó algo), fusiona antes de subir.
+  // Si falla, lo reintenta solo más tarde; sin conexión espera al evento "online".
+  async function flushQueue() {
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (pendingRef.current.length === 0) return;
+    if (flushingRef.current) {
+      flushAgainRef.current = true;
+      return;
+    }
+    if (!navigator.onLine) {
+      setSyncStatus("offline");
+      scheduleRetry(); // por si el evento "online" no llega (pasa a veces en iPad)
+      return;
+    }
+    flushingRef.current = true;
+    setSyncStatus("syncing");
+    let result = "error";
+    try {
+      const snapshot = dataRef.current;
+      const { data: row, error } = await supabaseRef.current
+        .from(TABLE)
+        .select("data, updated_at")
+        .eq("team_code", teamCodeRef.current)
+        .maybeSingle();
+      if (error) throw error;
+      const remoteUpdatedAt = row ? new Date(row.updated_at).getTime() : 0;
+      let toUpload = snapshot;
+      if (row && row.data && remoteUpdatedAt > getLastRemoteUpdatedAt()) {
+        const merged = mergePendingIntoRemote(row.data, snapshot, pendingRef.current);
+        toUpload = {
+          ...merged,
+          squad: migrateSquadPositions(merged.squad || []),
+          setPiecePositions: migrateSetPiecePositions(merged.setPiecePositions || {}),
+          updatedAt: Math.max(Date.now(), remoteUpdatedAt + 1),
+        };
+        if (dataRef.current !== snapshot) {
+          // Hubo cambios mientras se descargaba: se repite con los datos al día
+          flushAgainRef.current = true;
+          result = "retry-now";
+          return;
+        }
+        setData(toUpload);
+        dataRef.current = toUpload;
+        saveLocalData(toUpload);
+        if (matchRef.current) {
+          const refreshed = toUpload.matchesById[matchRef.current.id];
+          if (refreshed) setMatch(refreshed);
+        }
+      }
+      result = await pushToSupabase(toUpload);
+    } catch (e) {
+      console.error("Error subiendo cambios pendientes", e);
+      setSyncStatus(navigator.onLine ? "error" : "offline");
+    } finally {
+      flushingRef.current = false;
+      if (result === "ok" || result === "retry-now") {
+        retryAttemptRef.current = 0;
+        if (flushAgainRef.current || pendingRef.current.length > 0) {
+          flushAgainRef.current = false;
+          scheduleFlush(300);
+        }
+      } else if (result === "error") {
+        flushAgainRef.current = false;
+        scheduleRetry();
+      } else {
+        flushAgainRef.current = false; // "blocked": espera a que el usuario revise
+      }
     }
   }
 
@@ -6679,6 +6935,7 @@ function App() {
     setData(merged);
     dataRef.current = merged;
     saveLocalData(merged);
+    setLastRemoteUpdatedAt(remoteUpdatedAt);
     if (matchRef.current) {
       const refreshed = merged.matchesById[matchRef.current.id];
       if (refreshed) setMatch(refreshed);
@@ -6687,6 +6944,15 @@ function App() {
 
   async function pullFromSupabase() {
     if (!supabaseRef.current || !teamCodeRef.current) return;
+    // Con cambios sin subir, nunca se descarga encima: se suben (fusionando si hace falta)
+    if (pendingRef.current.length > 0) {
+      retryAttemptRef.current = 0;
+      return flushQueue();
+    }
+    if (!navigator.onLine) {
+      setSyncStatus("offline");
+      return;
+    }
     setSyncStatus("syncing");
     try {
       const { data: row, error } = await supabaseRef.current
@@ -6700,10 +6966,12 @@ function App() {
         if (remoteUpdatedAt > dataRef.current.updatedAt) {
           applyRemoteData(row.data, remoteUpdatedAt);
         } else if (dataRef.current.updatedAt > remoteUpdatedAt) {
-          await pushToSupabase(dataRef.current);
+          if ((await pushToSupabase(dataRef.current)) !== "ok") return;
+        } else {
+          setLastRemoteUpdatedAt(remoteUpdatedAt);
         }
       } else {
-        await pushToSupabase(dataRef.current);
+        if ((await pushToSupabase(dataRef.current)) !== "ok") return;
       }
       setSyncStatus("synced");
       setLastSyncedAt(Date.now());
@@ -6757,6 +7025,7 @@ function App() {
       if (error) throw error;
       if (row && row.data) {
         applyRemoteData(row.data, new Date(row.updated_at).getTime());
+        setPending([]); // el usuario eligió que gane la nube
         setSyncStatus("synced");
         setLastSyncedAt(Date.now());
       } else {
@@ -6882,7 +7151,9 @@ function App() {
           const row = payload.new;
           if (!row || row.device_id === deviceId) return;
           const remoteUpdatedAt = new Date(row.updated_at).getTime();
-          if (remoteUpdatedAt > dataRef.current.updatedAt) {
+          if (pendingRef.current.length > 0) {
+            flushQueue(); // fusiona lo del otro dispositivo con lo pendiente de este
+          } else if (remoteUpdatedAt > dataRef.current.updatedAt) {
             applyRemoteData(row.data, remoteUpdatedAt);
           }
         }
@@ -6897,20 +7168,30 @@ function App() {
 
   // Reintenta al recuperar conexión / volver a la pestaña
   useEffect(() => {
-    function handleOnline() { pullFromSupabase(); }
+    function handleOnline() {
+      setOnline(true);
+      retryAttemptRef.current = 0;
+      pullFromSupabase(); // con cambios pendientes, esto los sube
+    }
+    function handleOffline() {
+      setOnline(false);
+      setSyncStatus(computeStatus());
+    }
     function handleVisibility() {
       if (document.hidden && pushTimerRef.current) {
         clearTimeout(pushTimerRef.current);
         pushTimerRef.current = null;
-        pushToSupabase(dataRef.current);
+        flushQueue();
       } else if (!document.hidden) {
         pullFromSupabase();
       }
     }
     window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6918,12 +7199,21 @@ function App() {
 
   /* --- Mutación central de datos --- */
 
+  // Todo cambio se guarda primero en local y se apunta en la cola; la subida va aparte y,
+  // sin conexión, simplemente espera.
   function commit(nextData, { syncNow = true } = {}) {
-    const stamped = { ...nextData, updatedAt: Date.now() };
+    const prev = dataRef.current;
+    const stamped = { ...nextData, updatedAt: Math.max(Date.now(), (prev.updatedAt || 0) + 1) };
     setData(stamped);
     dataRef.current = stamped;
     saveLocalData(stamped);
-    scheduleSync(stamped, syncNow);
+    enqueueChange(prev, stamped, !syncNow);
+    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!navigator.onLine) {
+      setSyncStatus("offline");
+      return;
+    }
+    scheduleFlush(syncNow ? 0 : 1500);
   }
 
   function saveSquad(updatedSquad) {
@@ -7258,6 +7548,7 @@ function App() {
       .filter((m) => m.scheduled)
       .sort((a, b) => (a.date > b.date ? 1 : -1))[0] || null;
   const seasonHighlights = computeSeasonHighlights(Object.values(data.matchesById), data.squad);
+  const syncView = syncDisplay(syncStatus, online, pendingCount);
 
   return (
     <RatingConfigContext.Provider value={ratingConfig}>
@@ -7268,7 +7559,7 @@ function App() {
           <Home
             crests={data.crests}
             onSaveCrest={saveCrest}
-            syncStatus={syncStatus}
+            syncStatus={syncView}
             onGoSync={() => setView("sync")}
             onNewMatch={() => setView("setup")}
             nextMatch={nextScheduledMatch}
@@ -7307,6 +7598,7 @@ function App() {
         {view === "sync" && (
           <SyncSettings
             status={syncStatus}
+            display={syncView}
             teamCode={teamCode}
             lastSyncedAt={lastSyncedAt}
             supabaseUrl={supabaseConfig.url}
@@ -7359,6 +7651,7 @@ function App() {
             onUpdate={updateMatch}
             onFinish={finishMatch}
             onBack={goHome}
+            syncView={syncView}
           />
         )}
         {view === "summary" && match && (
