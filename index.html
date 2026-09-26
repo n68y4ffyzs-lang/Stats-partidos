@@ -3920,7 +3920,7 @@ function TeamEventsPanel({ match, onUpdate }) {
 /* ---------------------------------------------------------
    Pantalla: Resumen
 --------------------------------------------------------- */
-function MatchSummary({ match, squad, crests, onBack, onExport }) {
+function MatchSummary({ match, squad, crests, onBack, onExport, onUpdate }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [tab, setTab] = useState("resumen");
   const [showPlayerStats, setShowPlayerStats] = useState(false);
@@ -4009,6 +4009,8 @@ function MatchSummary({ match, squad, crests, onBack, onExport }) {
           </button>
 
           <MatchPdfPanel match={match} squad={squad} crests={crests} />
+
+          {onUpdate && <AddForgottenEvents match={match} squad={squad} onUpdate={onUpdate} />}
 
           <UncalledList match={match} squad={squad} />
 
@@ -4763,6 +4765,146 @@ async function shareOrDownloadPdf(doc, filename) {
     }
   }
   doc.save(filename);
+}
+
+// Partido ya finalizado: añadir acciones que se olvidaron registrar en directo (p.ej. dos
+// paradas del portero). Se guardan como eventos normales, marcados con `addedLater`, así que
+// cuentan en estadísticas, notas y PDF igual que las demás; esas se pueden quitar desde aquí.
+function AddForgottenEvents({ match, squad, onUpdate }) {
+  const rosterPlayers = [...new Set([...(match.onPitch || []), ...(match.bench || [])])]
+    .map((id) => squad.find((p) => p.id === id))
+    .filter(Boolean)
+    .sort((a, b) => Number(a.number) - Number(b.number));
+  const L = Number(match.halfLength) || 45;
+  const [open, setOpen] = useState(false);
+  const [playerId, setPlayerId] = useState("");
+  const [type, setType] = useState("");
+  const [detail, setDetail] = useState("");
+  const [half, setHalf] = useState(2);
+  const [minute, setMinute] = useState(2 * L);
+  const [count, setCount] = useState(1);
+
+  const player = rosterPlayers.find((p) => p.id === playerId);
+  const isGk = player && GOALKEEPER_NUMBERS.includes(String(player.number));
+  const detailMeta = EVENTS_WITH_DETAIL[type] && EVENTS_WITH_DETAIL[type].field !== "__type__" ? EVENTS_WITH_DETAIL[type] : null;
+  // Para porteros, su grupo primero; los goles de balón parado ocultos sí se ofrecen aquí
+  const groups = Object.keys(GROUP_META).sort((a, b) => (isGk ? (a === "portero" ? -1 : b === "portero" ? 1 : 0) : 0));
+  const minMinute = half === 1 ? 1 : L + 1;
+  const maxMinute = half === 1 ? L : 2 * L;
+  const addedLater = (match.events || []).filter((e) => e.addedLater);
+
+  function changeHalf(h) {
+    setHalf(h);
+    setMinute(h === 1 ? L : 2 * L);
+  }
+
+  function add() {
+    if (!player || !type) return;
+    if (detailMeta && !detail) return;
+    const m = Math.min(Math.max(Number(minute) || minMinute, minMinute), maxMinute);
+    const seconds = (m - 1 - (half === 2 ? L : 0)) * 60;
+    const n = Math.min(Math.max(Number(count) || 1, 1), 20);
+    const entries = Array.from({ length: n }, () => ({
+      id: genId(),
+      half,
+      seconds,
+      minute: m,
+      playerId: player.id,
+      playerNumber: player.number,
+      playerName: player.name,
+      type,
+      ...(detailMeta ? { [detailMeta.field]: detail } : {}),
+      addedLater: true,
+    }));
+    onUpdate({ ...match, events: [...(match.events || []), ...entries] }, true);
+    setCount(1);
+  }
+
+  function remove(id) {
+    onUpdate({ ...match, events: match.events.filter((e) => e.id !== id) }, true);
+  }
+
+  const selectCls = "mp-input w-full px-2 py-2 text-sm";
+  return (
+    <div className="mp-card p-3 mb-5">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between text-left">
+        <span className="text-xs uppercase tracking-wide" style={{ color: "var(--chalk-dim)" }}>
+          Añadir acciones olvidadas
+        </span>
+        <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 flex flex-col gap-2">
+          <select value={playerId} onChange={(e) => setPlayerId(e.target.value)} className={selectCls}>
+            <option value="">Jugador…</option>
+            {rosterPlayers.map((p) => (
+              <option key={p.id} value={p.id}>{p.number} · {p.name}</option>
+            ))}
+          </select>
+          <select value={type} onChange={(e) => { setType(e.target.value); setDetail(""); }} className={selectCls}>
+            <option value="">Acción…</option>
+            {groups.map((g) => (
+              <optgroup key={g} label={GROUP_META[g].label}>
+                {EVENT_TYPES.filter((ev) => ev.group === g).map((ev) => (
+                  <option key={ev.id} value={ev.id}>{ev.label}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          {detailMeta && (
+            <select value={detail} onChange={(e) => setDetail(e.target.value)} className={selectCls}>
+              <option value="">{detailMeta.prompt}…</option>
+              {detailMeta.options.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          )}
+          <div className="flex gap-2">
+            <select value={half} onChange={(e) => changeHalf(Number(e.target.value))} className={selectCls}>
+              <option value={1}>1ª parte</option>
+              <option value={2}>2ª parte</option>
+            </select>
+            <label className="flex items-center gap-1 text-xs w-full" style={{ color: "var(--chalk-dim)" }}>
+              Min.
+              <input type="number" min={minMinute} max={maxMinute} value={minute}
+                onChange={(e) => setMinute(e.target.value)} className="mp-input w-full px-2 py-2 text-sm" />
+            </label>
+            <label className="flex items-center gap-1 text-xs w-full" style={{ color: "var(--chalk-dim)" }}>
+              Veces
+              <input type="number" min={1} max={20} value={count}
+                onChange={(e) => setCount(e.target.value)} className="mp-input w-full px-2 py-2 text-sm" />
+            </label>
+          </div>
+          <button
+            onClick={add}
+            disabled={!player || !type || (detailMeta && !detail)}
+            className="mp-btn mp-btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-40"
+          >
+            Añadir
+          </button>
+
+          {addedLater.length > 0 && (
+            <div className="mt-2">
+              <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>Añadidas después del partido:</div>
+              <div className="flex flex-col gap-1">
+                {addedLater.map((e) => (
+                  <div key={e.id} className="flex items-center justify-between text-sm">
+                    <span>
+                      {e.minute}' · #{e.playerNumber} {e.playerName} · {EVENT_LABEL[e.type] || e.type}
+                      {eventDetailLabel(e) ? ` (${eventDetailLabel(e)})` : ""}
+                    </span>
+                    <button onClick={() => remove(e.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function MatchPdfPanel({ match, squad, crests }) {
@@ -7941,7 +8083,7 @@ function App() {
           />
         )}
         {view === "summary" && match && (
-          <MatchSummary match={match} squad={data.squad} crests={data.crests} onBack={goHome} onExport={exportCSV} />
+          <MatchSummary match={match} squad={data.squad} crests={data.crests} onBack={goHome} onExport={exportCSV} onUpdate={updateMatch} />
         )}
         {view === "season" && (
           <SeasonStats
