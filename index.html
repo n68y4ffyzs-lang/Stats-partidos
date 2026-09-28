@@ -1156,19 +1156,27 @@ function AccountCard({ authUser, configured, onSignIn, onSignUp, onSignOut, onRe
 }
 
 // Ajustes → Traer datos del código de equipo antiguo, en tres pasos con confirmación:
-// 1) buscar (solo lee), 2) descargar copia de seguridad, 3) copiar a la cuenta. Lo antiguo
-// no se borra ni se modifica.
+// 1) buscar (solo lee), 2) descargar copia de seguridad, 3) copiar a la cuenta. Se elige qué
+// copiar: los datos (plantilla, partidos, balón parado...) y/o la Pizarra de este dispositivo.
+// Si la cuenta ya tiene datos, los datos vienen desmarcados para no pisar lo registrado
+// después. Lo antiguo no se borra ni se modifica.
 function LegacyImportCard({ accountData, onInspect, onBackup, onImport }) {
   const [code, setCode] = useState(() => getStoredTeamCode());
   const [found, setFound] = useState(null);
   const [source, setSource] = useState(null);
+  const [copyData, setCopyData] = useState(false);
+  const [copyBoard, setCopyBoard] = useState(false);
   const [busy, setBusy] = useState(false);
   const [backedUp, setBackedUp] = useState(false);
   const [done, setDone] = useState(false);
   const labelStyle = { color: "var(--chalk-dim)" };
   const count = (d) => d ? `${(d.squad || []).length} jugadores, ${(d.matchesList || []).length} partidos` : "";
   const when = (d) => (d && d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "—");
-  const accountHasData = accountData && ((accountData.squad || []).length || (accountData.matchesList || []).length);
+  const boardCount = (b) => {
+    const n = Object.keys(b.positions).length;
+    return `${n} ficha${n === 1 ? "" : "s"} colocada${n === 1 ? "" : "s"}, ${b.strokes.length} dibujo${b.strokes.length === 1 ? "" : "s"}`;
+  };
+  const accountHasData = !!(accountData && ((accountData.squad || []).length || (accountData.matchesList || []).length));
 
   async function search() {
     setBusy(true);
@@ -1182,17 +1190,30 @@ function LegacyImportCard({ accountData, onInspect, onBackup, onImport }) {
     const cands = [res.cloud && "cloud", res.local && "local"].filter(Boolean);
     if (cands.length === 1) setSource(cands[0]);
     else if (cands.length === 2) setSource((res.local.updatedAt || 0) > (res.cloud.updatedAt || 0) ? "local" : "cloud");
+    setCopyData(cands.length > 0 && !accountHasData);
+    setCopyBoard(!!res.board);
     setBusy(false);
   }
 
   const chosen = found && source ? found[source] : null;
+  const dataToCopy = copyData && chosen ? chosen : null;
+  const boardToCopy = copyBoard && found && found.board ? found.board : null;
+  const somethingToCopy = !!(dataToCopy || boardToCopy);
+
+  function changed(fn) {
+    return (...args) => { fn(...args); setBackedUp(false); setDone(false); };
+  }
 
   function doImport() {
-    const warn = accountHasData
-      ? `\n\nOJO: tu cuenta ya tiene datos (${count(accountData)}), que se sustituirán. Tienes su copia en el archivo que se acaba de descargar.`
+    const parts = [];
+    if (dataToCopy) parts.push(`· Plantilla, partidos, estadísticas y balón parado (${count(dataToCopy)})`);
+    if (boardToCopy) parts.push(`· Pizarra de este dispositivo (${boardCount(boardToCopy)})`);
+    const warn = dataToCopy && accountHasData
+      ? `\n\nOJO: los datos de tu cuenta (${count(accountData)}) se sustituirán por estos; lo que hayas registrado después de la primera copia se perdería. Tienes su copia en el archivo descargado.`
       : "";
-    if (!window.confirm(`¿Copiar a tu cuenta los datos del código "${code.trim()}" (${count(chosen)})?${warn}\n\nLo antiguo no se borra.`)) return;
-    onImport(chosen);
+    const boardWarn = boardToCopy ? "\n\nLa Pizarra que tengas ahora con tu cuenta en este dispositivo se sustituye (también tienes su copia)." : "";
+    if (!window.confirm(`¿Copiar a tu cuenta desde el código "${code.trim()}"?\n\n${parts.join("\n")}${warn}${boardWarn}\n\nLo antiguo no se borra.`)) return;
+    onImport(dataToCopy, boardToCopy);
     setDone(true);
   }
 
@@ -1212,7 +1233,7 @@ function LegacyImportCard({ accountData, onInspect, onBackup, onImport }) {
 
       {found && (
         <div className="mt-3 flex flex-col gap-2 text-xs">
-          {!found.cloud && !found.local && (
+          {!found.cloud && !found.local && !found.board && (
             <div style={{ color: "var(--amber)" }}>
               No hay datos con ese código{found.cloudError ? ` (la nube respondió: ${found.cloudError})` : ""}.
             </div>
@@ -1220,17 +1241,42 @@ function LegacyImportCard({ accountData, onInspect, onBackup, onImport }) {
           {found.cloudError && (found.cloud || found.local) && (
             <div style={{ color: "var(--amber)" }}>No se pudo leer la nube: {found.cloudError}</div>
           )}
-          {[["cloud", "En la nube"], ["local", "En este dispositivo"]].map(([k, label]) =>
-            found[k] ? (
-              <label key={k} className="flex items-start gap-2">
-                <input type="radio" checked={source === k} onChange={() => { setSource(k); setBackedUp(false); }} className="mt-0.5" />
-                <span>{label}: {count(found[k])} · última modificación {when(found[k])}</span>
+
+          {(found.cloud || found.local) && (
+            <div className="flex flex-col gap-1">
+              <label className="flex items-start gap-2 font-semibold">
+                <input type="checkbox" checked={copyData} onChange={changed((e) => setCopyData(e.target.checked))} className="mt-0.5" />
+                <span>Plantilla, partidos, estadísticas y balón parado</span>
               </label>
-            ) : null
+              {accountHasData && (
+                <div className="ml-5" style={{ color: "var(--amber)" }}>
+                  Tu cuenta ya tiene datos ({count(accountData)}). Márcalo solo si quieres sustituirlos por los antiguos.
+                </div>
+              )}
+              {copyData && [["cloud", "En la nube"], ["local", "En este dispositivo"]].map(([k, label]) =>
+                found[k] ? (
+                  <label key={k} className="flex items-start gap-2 ml-5">
+                    <input type="radio" checked={source === k} onChange={changed(() => setSource(k))} className="mt-0.5" />
+                    <span>{label}: {count(found[k])} · última modificación {when(found[k])}</span>
+                  </label>
+                ) : null
+              )}
+            </div>
           )}
-          {chosen && (
+
+          <label className="flex items-start gap-2 font-semibold">
+            <input type="checkbox" checked={copyBoard} disabled={!found.board} onChange={changed((e) => setCopyBoard(e.target.checked))} className="mt-0.5" />
+            <span>
+              Pizarra de este dispositivo
+              <span className="font-normal" style={labelStyle}>
+                {found.board ? ` (${boardCount(found.board)})` : " (no hay Pizarra guardada con ese código en este dispositivo)"}
+              </span>
+            </span>
+          </label>
+
+          {somethingToCopy && (
             <>
-              <button onClick={() => { onBackup(chosen, code.trim()); setBackedUp(true); }}
+              <button onClick={() => { onBackup(dataToCopy, code.trim(), boardToCopy); setBackedUp(true); }}
                 className="mp-btn mp-btn-outline w-full py-2 text-sm mt-1">
                 2. Descargar copia de seguridad {backedUp ? "✓" : ""}
               </button>
@@ -1239,6 +1285,11 @@ function LegacyImportCard({ accountData, onInspect, onBackup, onImport }) {
                 {done ? "Copiado a tu cuenta ✓" : "3. Copiar a mi cuenta"}
               </button>
               {!backedUp && <div style={labelStyle}>Descarga primero la copia de seguridad para poder copiar.</div>}
+              {backedUp && !done && (
+                <div className="font-semibold" style={{ color: "var(--amber)" }}>
+                  Falta el último paso: pulsa "3. Copiar a mi cuenta".
+                </div>
+              )}
             </>
           )}
         </div>
@@ -7051,13 +7102,17 @@ const TRAY_COLS = Math.floor((105 - TRAY_LABEL_W) / TRAY_COL_W);
 const TRAY_ROW_H = 9.6;
 const ERASER_RADIUS = 3;
 
-function loadPitchBoard() {
+function parsePitchBoard(raw) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(teamKey(PITCH_BOARD_KEY)) || "null");
+    const parsed = JSON.parse(raw || "null");
     return { positions: parsed?.positions || {}, strokes: parsed?.strokes || [] };
   } catch (e) {
     return { positions: {}, strokes: [] };
   }
+}
+
+function loadPitchBoard() {
+  return parsePitchBoard(localStorage.getItem(teamKey(PITCH_BOARD_KEY)));
 }
 
 // Reparto: campo (coordenadas 0..105 x 0..68) y debajo una franja para mi equipo y otra para el rival
@@ -8035,13 +8090,16 @@ function App() {
   // Solo lee: la fila antigua de la nube y lo guardado en este dispositivo con ese código.
   // No borra ni modifica nada de lo antiguo.
   async function inspectLegacyData(code) {
-    const result = { cloud: null, local: null, cloudError: null };
+    const result = { cloud: null, local: null, cloudError: null, board: null };
     try {
       const raw = localStorage.getItem(teamKey(DATA_KEY, code));
       if (raw) result.local = JSON.parse(raw);
     } catch (e) {
       /* sin copia local */
     }
+    // La Pizarra nunca se sincronizó con la nube: solo existe en el dispositivo donde se hizo
+    const board = parsePitchBoard(localStorage.getItem(teamKey(PITCH_BOARD_KEY, code)));
+    if (board && (Object.keys(board.positions).length || board.strokes.length)) result.board = board;
     if (configured && window.supabase) {
       // Cliente sin sesión (rol anon), que es el que tenía acceso a la tabla antigua
       const read = async (withHeader) => {
@@ -8078,16 +8136,39 @@ function App() {
   }
 
   // Copias de seguridad antes de copiar: lo que se va a copiar y lo que ya hubiera en la cuenta
-  function backupBeforeLegacyImport(source, code) {
+  // Copias de seguridad de lo que se va a copiar y de lo que se va a sustituir en la cuenta
+  function backupBeforeLegacyImport(source, code, board) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    downloadJSON(source, `statix_backup_codigo_${pdfFileSlug(code)}_${stamp}.json`);
-    const cur = dataRef.current;
-    if ((cur.squad || []).length || (cur.matchesList || []).length) {
-      downloadJSON(cur, `statix_backup_cuenta_antes_de_copiar_${stamp}.json`);
+    const slug = pdfFileSlug(code);
+    if (source) {
+      downloadJSON(source, `statix_backup_codigo_${slug}_${stamp}.json`);
+      const cur = dataRef.current;
+      if ((cur.squad || []).length || (cur.matchesList || []).length) {
+        downloadJSON(cur, `statix_backup_cuenta_antes_de_copiar_${stamp}.json`);
+      }
+    }
+    if (board) {
+      downloadJSON(board, `statix_backup_pizarra_codigo_${slug}_${stamp}.json`);
+      const curBoard = loadPitchBoard();
+      if (Object.keys(curBoard.positions).length || curBoard.strokes.length) {
+        downloadJSON(curBoard, `statix_backup_pizarra_cuenta_antes_de_copiar_${stamp}.json`);
+      }
     }
   }
 
-  function importLegacyData(source) {
+  // `source`: datos (plantilla, partidos, balón parado...) o null para no tocarlos.
+  // `board`: Pizarra de este dispositivo o null. Se guarda en la de la cuenta activa, en este
+  // dispositivo (como siempre, la Pizarra no se sincroniza entre dispositivos).
+  function importLegacyData(source, board) {
+    if (board) {
+      try {
+        localStorage.setItem(teamKey(PITCH_BOARD_KEY), JSON.stringify({ positions: board.positions, strokes: board.strokes }));
+      } catch (e) {
+        console.error("Error copiando la Pizarra", e);
+        window.alert("No se pudo copiar la Pizarra en este dispositivo.");
+      }
+    }
+    if (!source) return;
     const merged = {
       ...emptyData(),
       ...source,
