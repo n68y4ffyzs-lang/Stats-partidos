@@ -53,8 +53,13 @@ const { useState, useEffect, useRef, useCallback } = React;
    falta editar este archivo. Mientras no se configuren, la app
    funciona igualmente en modo solo-local (localStorage).
 =========================================================== */
-const TABLE = "registro_partido_data";
-const HISTORY_TABLE = "registro_partido_history";
+// Datos en la nube por cuenta (email + contraseña de Supabase Auth): una fila por usuario,
+// protegida con RLS para que cada cuenta solo lea y escriba la suya (supabase/paso1_cuentas.sql).
+const TABLE = "statix_user_data";
+const HISTORY_TABLE = "statix_user_history";
+const OWNER_COL = "user_id";
+// Tabla antigua por código de equipo: solo se lee para copiar esos datos a la cuenta
+const LEGACY_TABLE = "registro_partido_data";
 const SUPABASE_URL_KEY = "rp_supabase_url";
 const SUPABASE_ANON_KEY_KEY = "rp_supabase_anon_key";
 
@@ -292,15 +297,17 @@ function venueLabel(m) {
    Almacenamiento local + sincronización con Supabase
 --------------------------------------------------------- */
 const DATA_KEY = "rp_data_v1";
-const TEAM_CODE_KEY = "rp_team_code";
+const TEAM_CODE_KEY = "rp_team_code"; // antiguo: solo para proponer qué datos copiar a la cuenta
+const AUTH_USER_KEY = "rp_auth_user";
 const DEVICE_ID_KEY = "rp_device_id";
 const PENDING_KEY = "rp_pending_sync";
 const LAST_REMOTE_KEY = "rp_last_remote_updated_at";
 
-/* Aislamiento por equipo en este dispositivo: todo lo que es de un equipo (datos, cola de
-   pendientes, pizarra, caché de la clasificación...) se guarda bajo una clave con su código
-   de equipo, así que entrar con otro código nunca enseña ni sube los datos del anterior.
-   Sin código (modo solo local) se usa la clave sin sufijo. */
+/* Aislamiento en este dispositivo: todo lo que es de una cuenta (datos, cola de pendientes,
+   pizarra, caché de la clasificación...) se guarda bajo una clave con su id de usuario, así
+   que entrar con otra cuenta nunca enseña ni sube los datos de la anterior. Sin sesión (modo
+   solo local) se usa la clave sin sufijo. Los datos de la época de los códigos de equipo
+   siguen en sus claves antiguas (…::<código>) hasta que se copian a una cuenta. */
 let activeTeamCode = "";
 
 function teamKey(base, code = activeTeamCode) {
@@ -690,6 +697,26 @@ function getDeviceId() {
   return id;
 }
 
+// Última cuenta con sesión en este dispositivo ({ id, email }): permite abrir la app y ver sus
+// datos sin conexión aunque la sesión de Supabase no se pueda renovar en ese momento.
+function getStoredAuthUser() {
+  try {
+    const u = JSON.parse(localStorage.getItem(AUTH_USER_KEY) || "null");
+    return u && u.id ? u : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setStoredAuthUser(user) {
+  try {
+    if (user) localStorage.setItem(AUTH_USER_KEY, JSON.stringify({ id: user.id, email: user.email || "" }));
+    else localStorage.removeItem(AUTH_USER_KEY);
+  } catch (e) {
+    /* no crítico */
+  }
+}
+
 function getStoredTeamCode() {
   return localStorage.getItem(TEAM_CODE_KEY) || "";
 }
@@ -911,7 +938,7 @@ function GlobalStyles() {
 --------------------------------------------------------- */
 const SYNC_META = {
   unconfigured: { color: "#8A8577", label: "Sin configurar" },
-  "no-code": { color: "var(--amber)", label: "Sin código de equipo" },
+  "no-code": { color: "var(--amber)", label: "Sin sesión iniciada" },
   offline: { color: "var(--amber)", label: "Sin conexión" },
   syncing: { color: "var(--cielo)", label: "Sincronizando…" },
   synced: { color: "var(--turf)", label: "Sincronizado" },
@@ -1062,15 +1089,180 @@ function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
   );
 }
 
+// Ajustes → Cuenta: entrar, crear cuenta, recuperar contraseña y cerrar sesión
+function AccountCard({ authUser, configured, onSignIn, onSignUp, onSignOut, onResetPassword }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const labelStyle = { color: "var(--chalk-dim)" };
+
+  async function run(fn) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = (await fn()) || {};
+      if (res.error) setMsg({ error: true, text: res.error });
+      else if (res.info) setMsg({ error: false, text: res.info });
+      if (res.ok) setPassword("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (authUser) {
+    return (
+      <div className="mp-card p-3 mb-4">
+        <label className="text-xs" style={labelStyle}>Cuenta</label>
+        <div className="text-sm mt-1 mb-2">Sesión iniciada como <span className="font-semibold">{authUser.email}</span></div>
+        <p className="text-xs mb-2" style={labelStyle}>
+          Entra con esta misma cuenta en el iPad y en el ordenador para que compartan los datos.
+        </p>
+        <button onClick={onSignOut} className="mp-btn mp-btn-outline w-full py-2 text-sm">Cerrar sesión</button>
+      </div>
+    );
+  }
+
+  const valid = /.+@.+\..+/.test(email.trim()) && password.length >= 6;
+  return (
+    <div className="mp-card p-3 mb-4">
+      <label className="text-xs" style={labelStyle}>Cuenta</label>
+      <p className="text-xs mt-1 mb-2" style={labelStyle}>
+        Entra con tu email y contraseña para ver y sincronizar tus datos. Usa la misma cuenta
+        en el iPad y en el ordenador.
+      </p>
+      <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="tu@email.com"
+        className="mp-input px-3 py-2 w-full mb-2" autoCapitalize="none" autoCorrect="off" autoComplete="email" />
+      <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Contraseña (mínimo 6 caracteres)"
+        className="mp-input px-3 py-2 w-full" autoComplete="current-password" />
+      <div className="flex gap-2 mt-3">
+        <button onClick={() => run(() => onSignIn(email.trim(), password))} disabled={!configured || !valid || busy}
+          className="mp-btn mp-btn-primary flex-1 py-2.5 font-semibold disabled:opacity-40">Entrar</button>
+        <button onClick={() => run(() => onSignUp(email.trim(), password))} disabled={!configured || !valid || busy}
+          className="mp-btn mp-btn-outline flex-1 py-2.5 text-sm disabled:opacity-40">Crear cuenta</button>
+      </div>
+      <button onClick={() => run(() => onResetPassword(email.trim()))} disabled={!configured || !/.+@.+\..+/.test(email.trim()) || busy}
+        className="text-xs mt-2 disabled:opacity-40" style={{ color: "var(--cielo)" }}>
+        ¿Olvidaste la contraseña? (escribe tu email arriba)
+      </button>
+      {msg && (
+        <div className="text-xs mt-2" style={{ color: msg.error ? "var(--crimson)" : "var(--turf)" }}>{msg.text}</div>
+      )}
+      {!configured && (
+        <div className="text-xs mt-2" style={{ color: "var(--amber)" }}>Primero guarda la conexión con Supabase de abajo.</div>
+      )}
+    </div>
+  );
+}
+
+// Ajustes → Traer datos del código de equipo antiguo, en tres pasos con confirmación:
+// 1) buscar (solo lee), 2) descargar copia de seguridad, 3) copiar a la cuenta. Lo antiguo
+// no se borra ni se modifica.
+function LegacyImportCard({ accountData, onInspect, onBackup, onImport }) {
+  const [code, setCode] = useState(() => getStoredTeamCode());
+  const [found, setFound] = useState(null);
+  const [source, setSource] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [backedUp, setBackedUp] = useState(false);
+  const [done, setDone] = useState(false);
+  const labelStyle = { color: "var(--chalk-dim)" };
+  const count = (d) => d ? `${(d.squad || []).length} jugadores, ${(d.matchesList || []).length} partidos` : "";
+  const when = (d) => (d && d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "—");
+  const accountHasData = accountData && ((accountData.squad || []).length || (accountData.matchesList || []).length);
+
+  async function search() {
+    setBusy(true);
+    setFound(null);
+    setSource(null);
+    setBackedUp(false);
+    setDone(false);
+    const res = await onInspect(code.trim());
+    setFound(res);
+    // Por defecto, la versión más reciente
+    const cands = [res.cloud && "cloud", res.local && "local"].filter(Boolean);
+    if (cands.length === 1) setSource(cands[0]);
+    else if (cands.length === 2) setSource((res.local.updatedAt || 0) > (res.cloud.updatedAt || 0) ? "local" : "cloud");
+    setBusy(false);
+  }
+
+  const chosen = found && source ? found[source] : null;
+
+  function doImport() {
+    const warn = accountHasData
+      ? `\n\nOJO: tu cuenta ya tiene datos (${count(accountData)}), que se sustituirán. Tienes su copia en el archivo que se acaba de descargar.`
+      : "";
+    if (!window.confirm(`¿Copiar a tu cuenta los datos del código "${code.trim()}" (${count(chosen)})?${warn}\n\nLo antiguo no se borra.`)) return;
+    onImport(chosen);
+    setDone(true);
+  }
+
+  return (
+    <div className="mp-card p-3 mb-4">
+      <label className="text-xs" style={labelStyle}>Traer datos de tu código de equipo antiguo</label>
+      <p className="text-xs mt-1 mb-2" style={labelStyle}>
+        Copia a tu cuenta lo que tenías con el código de equipo. Nada de lo antiguo se borra.
+      </p>
+      <div className="flex gap-2">
+        <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Código de equipo antiguo"
+          className="mp-input px-3 py-2 w-full" autoCapitalize="none" autoCorrect="off" />
+        <button onClick={search} disabled={!code.trim() || busy} className="mp-btn mp-btn-outline px-3 py-2 text-xs shrink-0 disabled:opacity-40">
+          {busy ? "Buscando…" : "1. Buscar"}
+        </button>
+      </div>
+
+      {found && (
+        <div className="mt-3 flex flex-col gap-2 text-xs">
+          {!found.cloud && !found.local && (
+            <div style={{ color: "var(--amber)" }}>
+              No hay datos con ese código{found.cloudError ? ` (la nube respondió: ${found.cloudError})` : ""}.
+            </div>
+          )}
+          {found.cloudError && (found.cloud || found.local) && (
+            <div style={{ color: "var(--amber)" }}>No se pudo leer la nube: {found.cloudError}</div>
+          )}
+          {[["cloud", "En la nube"], ["local", "En este dispositivo"]].map(([k, label]) =>
+            found[k] ? (
+              <label key={k} className="flex items-start gap-2">
+                <input type="radio" checked={source === k} onChange={() => { setSource(k); setBackedUp(false); }} className="mt-0.5" />
+                <span>{label}: {count(found[k])} · última modificación {when(found[k])}</span>
+              </label>
+            ) : null
+          )}
+          {chosen && (
+            <>
+              <button onClick={() => { onBackup(chosen, code.trim()); setBackedUp(true); }}
+                className="mp-btn mp-btn-outline w-full py-2 text-sm mt-1">
+                2. Descargar copia de seguridad {backedUp ? "✓" : ""}
+              </button>
+              <button onClick={doImport} disabled={!backedUp || done}
+                className="mp-btn mp-btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-40">
+                {done ? "Copiado a tu cuenta ✓" : "3. Copiar a mi cuenta"}
+              </button>
+              {!backedUp && <div style={labelStyle}>Descarga primero la copia de seguridad para poder copiar.</div>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SyncSettings({
   status,
   display,
-  teamCode,
+  authUser,
   lastSyncedAt,
   supabaseUrl,
   supabaseKey,
   configured,
-  onSaveTeamCode,
+  onSignIn,
+  onSignUp,
+  onSignOut,
+  onResetPassword,
+  onInspectLegacy,
+  onBackupLegacy,
+  onImportLegacy,
+  accountData,
   onSaveConfig,
   onSyncNow,
   onForcePush,
@@ -1089,15 +1281,15 @@ function SyncSettings({
   onSaveCrest,
   onBack,
 }) {
-  const [code, setCode] = useState(teamCode);
+  const ownerId = authUser ? authUser.id : "";
   const [url, setUrl] = useState(supabaseUrl);
   const [key, setKey] = useState(supabaseKey);
   const importInputRef = useRef(null);
 
   useEffect(() => {
-    if (configured && teamCode) onLoadHistory();
+    if (configured && ownerId) onLoadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configured, teamCode]);
+  }, [configured, ownerId]);
 
   function handleImportFile(e) {
     const file = e.target.files && e.target.files[0];
@@ -1131,7 +1323,7 @@ function SyncSettings({
       </div>
 
       {team && onSaveTeam && (
-        <TeamProfileCard key={teamCode} team={team} crests={crests} onSave={onSaveTeam} onSaveCrest={onSaveCrest} />
+        <TeamProfileCard key={ownerId} team={team} crests={crests} onSave={onSaveTeam} onSaveCrest={onSaveCrest} />
       )}
 
       <div className="mp-card p-3 mb-4">
@@ -1170,39 +1362,28 @@ function SyncSettings({
         </button>
       </div>
 
-      <div className="mp-card p-3 mb-4">
-        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-          Código de equipo
-        </label>
-        <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
-          Usa el mismo código en el iPad y en el ordenador para que compartan los datos.
-          Solo tú lo conoces, no hace falta cuenta ni login.
-        </p>
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="p.ej. entrenador-2026"
-          className="mp-input px-3 py-2 w-full"
-          autoCapitalize="none"
-          autoCorrect="off"
+      <AccountCard
+        authUser={authUser}
+        configured={configured}
+        onSignIn={onSignIn}
+        onSignUp={onSignUp}
+        onSignOut={onSignOut}
+        onResetPassword={onResetPassword}
+      />
+
+      {configured && ownerId && (
+        <LegacyImportCard
+          key={ownerId}
+          accountData={accountData}
+          onInspect={onInspectLegacy}
+          onBackup={onBackupLegacy}
+          onImport={onImportLegacy}
         />
-        <button
-          onClick={() => onSaveTeamCode(code.trim())}
-          disabled={!code.trim() || !configured}
-          className="mp-btn mp-btn-primary w-full py-2.5 mt-3 font-semibold disabled:opacity-40"
-        >
-          Guardar y sincronizar
-        </button>
-        {!configured && (
-          <div className="text-xs mt-2" style={{ color: "var(--amber)" }}>
-            Primero guarda la conexión con Supabase de arriba.
-          </div>
-        )}
-      </div>
+      )}
 
       <button
         onClick={onSyncNow}
-        disabled={!configured || !teamCode}
+        disabled={!configured || !ownerId}
         className="mp-btn mp-btn-outline w-full py-2.5 text-sm disabled:opacity-40 mb-4"
       >
         Sincronizar ahora
@@ -1236,7 +1417,7 @@ function SyncSettings({
         </div>
       </div>
 
-      {configured && teamCode && (
+      {configured && ownerId && (
         <>
           <div className="mp-card p-3 mb-4">
             <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
@@ -1992,7 +2173,7 @@ function BottomNav({ active, onNavigate }) {
 /* ---------------------------------------------------------
    Pantalla: Inicio (pestaña "Inicio" de la barra inferior)
 --------------------------------------------------------- */
-function Home({ teamName, crests, onSaveCrest, syncStatus, onGoSync, onNewMatch, nextMatch, onOpenMatch, highlights }) {
+function Home({ needsLogin, teamName, crests, onSaveCrest, syncStatus, onGoSync, onNewMatch, nextMatch, onOpenMatch, highlights }) {
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-4 pt-2">
@@ -2010,6 +2191,12 @@ function Home({ teamName, crests, onSaveCrest, syncStatus, onGoSync, onNewMatch,
         </div>
         <SyncBadge status={syncStatus} onClick={onGoSync} />
       </div>
+
+      {needsLogin && (
+        <button onClick={onGoSync} className="mp-card w-full p-3 mb-4 text-left text-sm" style={{ borderColor: "var(--amber)" }}>
+          Inicia sesión con tu email en <span className="font-semibold">Ajustes</span> para ver y sincronizar tus datos.
+        </button>
+      )}
 
       <div className="mp-card p-3 mb-4">
         <div className="text-xs uppercase tracking-wide mb-3" style={{ color: "var(--chalk-dim)" }}>
@@ -7311,7 +7498,8 @@ function App() {
   const [view, setView] = useState("home");
   const [data, setData] = useState(loadLocalData);
   const [match, setMatch] = useState(null);
-  const [teamCode, setTeamCodeState] = useState(getStoredTeamCode);
+  const [authUser, setAuthUser] = useState(getStoredAuthUser);
+  const ownerId = authUser ? authUser.id : "";
   const [supabaseConfig, setSupabaseConfig] = useState(getStoredSupabaseConfig);
   const [syncStatus, setSyncStatus] = useState("unconfigured");
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
@@ -7321,7 +7509,7 @@ function App() {
   const configured = isValidSupabaseConfig(supabaseConfig.url, supabaseConfig.key);
 
   const dataRef = useRef(data);
-  const teamCodeRef = useRef(teamCode);
+  const ownerRef = useRef(ownerId);
   const matchRef = useRef(match);
   const pushTimerRef = useRef(null);
   const supabaseRef = useRef(null);
@@ -7335,29 +7523,49 @@ function App() {
   const deviceId = useRef(getDeviceId()).current;
 
   useEffect(() => { dataRef.current = data; }, [data]);
-  useEffect(() => { teamCodeRef.current = teamCode; }, [teamCode]);
+  useEffect(() => { ownerRef.current = ownerId; }, [ownerId]);
   useEffect(() => { matchRef.current = match; }, [match]);
 
   // Crea (o recrea) el cliente de Supabase cuando cambia la configuración
   useEffect(() => {
     if (configured && window.supabase) {
-      // La cabecera x-team-code permite que Supabase limite cada petición a las filas de este
-      // equipo (ver supabase/aislamiento_por_equipo.sql); sin ese SQL aplicado no cambia nada.
+      // La sesión (email + contraseña) la guarda y renueva el propio cliente de Supabase
       supabaseRef.current = window.supabase.createClient(supabaseConfig.url, supabaseConfig.key, {
-        global: { headers: { "x-team-code": teamCode || "" } },
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
       });
-      setSyncStatus(teamCodeRef.current ? "synced" : "no-code");
+      setSyncStatus(ownerRef.current ? "synced" : "no-code");
     } else {
       supabaseRef.current = null;
       setSyncStatus("unconfigured");
     }
-  }, [configured, supabaseConfig.url, supabaseConfig.key, teamCode]);
+  }, [configured, supabaseConfig.url, supabaseConfig.key]);
+
+  // Sesión: al entrar se cargan los datos de esa cuenta; solo un cierre de sesión real
+  // (SIGNED_OUT) la quita. Sin conexión no se pierde la sesión, aunque no se pueda renovar.
+  useEffect(() => {
+    const client = supabaseRef.current;
+    if (!client) return;
+    let cancelled = false;
+    client.auth.getSession().then(({ data }) => {
+      if (!cancelled && data && data.session && data.session.user) handleAuthUser(data.session.user);
+    });
+    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") handleAuthUser(null);
+      else if (session && session.user) handleAuthUser(session.user);
+      if (event === "PASSWORD_RECOVERY") setTimeout(promptNewPassword, 300);
+    });
+    return () => {
+      cancelled = true;
+      sub && sub.subscription && sub.subscription.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured, supabaseConfig.url, supabaseConfig.key]);
 
   /* --- Sincronización con Supabase --- */
 
   function computeStatus() {
     if (!configured) return "unconfigured";
-    if (!teamCodeRef.current) return "no-code";
+    if (!ownerRef.current) return "no-code";
     if (!navigator.onLine) return "offline";
     return "synced";
   }
@@ -7369,10 +7577,10 @@ function App() {
   // Devuelve "ok", "blocked" (el usuario canceló el aviso) o "error". Si sube bien, borra de la
   // cola los cambios que ya iban incluidos en `stamped` (los hechos durante la subida se quedan).
   async function pushToSupabase(stamped, opts = {}) {
-    if (!supabaseRef.current || !teamCodeRef.current) return "error";
+    if (!supabaseRef.current || !ownerRef.current) return "error";
     // El código con el que empezó la subida: si el usuario cambia de equipo mientras tanto,
     // estos datos no pueden acabar en la fila del otro equipo.
-    const code = teamCodeRef.current;
+    const code = ownerRef.current;
     const client = supabaseRef.current;
     const coveredIds = new Set(
       pendingRef.current.filter((e) => e.at <= stamped.updatedAt).map((e) => e.id)
@@ -7383,7 +7591,7 @@ function App() {
         const { data: existing, error: fetchErr } = await client
           .from(TABLE)
           .select("data")
-          .eq("team_code", code)
+          .eq(OWNER_COL, code)
           .maybeSingle();
         if (fetchErr) throw fetchErr;
         const remoteData = existing && existing.data;
@@ -7407,9 +7615,9 @@ function App() {
           }
         }
       }
-      if (teamCodeRef.current !== code) return "stale";
+      if (ownerRef.current !== code) return "stale";
       const { error } = await client.from(TABLE).upsert({
-        team_code: code,
+        [OWNER_COL]: code,
         data: stamped,
         device_id: deviceId,
         updated_at: new Date(stamped.updatedAt).toISOString(),
@@ -7418,11 +7626,11 @@ function App() {
       // Copia en el histórico: no crítica, no bloquea ni falla la sincronización si falla.
       client
         .from(HISTORY_TABLE)
-        .insert({ team_code: code, data: stamped, device_id: deviceId })
+        .insert({ [OWNER_COL]: code, data: stamped, device_id: deviceId })
         .then(({ error: histError }) => {
           if (histError) console.error("Error guardando histórico", histError);
         });
-      if (teamCodeRef.current !== code) return "stale";
+      if (ownerRef.current !== code) return "stale";
       setLastRemoteUpdatedAt(stamped.updatedAt);
       removePending(coveredIds);
       setSyncStatus("synced");
@@ -7452,7 +7660,7 @@ function App() {
   // agrupan en una sola entrada mientras no haya otro cambio entre medias, para que el
   // contador de pendientes refleje acciones reales y no un tic cada 5 segundos.
   function enqueueChange(prev, next, silent) {
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !ownerRef.current) return;
     const { keys, matchIds } = diffDataForQueue(prev, next);
     if (keys.length === 0 && matchIds.length === 0) return;
     const entries = pendingRef.current;
@@ -7489,7 +7697,7 @@ function App() {
   // dispositivo estuvo al día (otro dispositivo guardó algo), fusiona antes de subir.
   // Si falla, lo reintenta solo más tarde; sin conexión espera al evento "online".
   async function flushQueue() {
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !ownerRef.current) return;
     if (pendingRef.current.length === 0) return;
     if (flushingRef.current) {
       flushAgainRef.current = true;
@@ -7503,16 +7711,16 @@ function App() {
     flushingRef.current = true;
     setSyncStatus("syncing");
     let result = "error";
-    const code = teamCodeRef.current;
+    const code = ownerRef.current;
     try {
       const snapshot = dataRef.current;
       const { data: row, error } = await supabaseRef.current
         .from(TABLE)
         .select("data, updated_at")
-        .eq("team_code", teamCodeRef.current)
+        .eq(OWNER_COL, ownerRef.current)
         .maybeSingle();
       if (error) throw error;
-      if (teamCodeRef.current !== code) {
+      if (ownerRef.current !== code) {
         result = "stale";
         return;
       }
@@ -7580,7 +7788,7 @@ function App() {
   }
 
   async function pullFromSupabase() {
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !ownerRef.current) return;
     // Con cambios sin subir, nunca se descarga encima: se suben (fusionando si hace falta)
     if (pendingRef.current.length > 0) {
       retryAttemptRef.current = 0;
@@ -7591,15 +7799,15 @@ function App() {
       return;
     }
     setSyncStatus("syncing");
-    const code = teamCodeRef.current;
+    const code = ownerRef.current;
     try {
       const { data: row, error } = await supabaseRef.current
         .from(TABLE)
         .select("data, updated_at")
-        .eq("team_code", code)
+        .eq(OWNER_COL, code)
         .maybeSingle();
       if (error) throw error;
-      if (teamCodeRef.current !== code) return; // cambió de equipo mientras se descargaba
+      if (ownerRef.current !== code) return; // cambió de equipo mientras se descargaba
       if (row && row.data) {
         const remoteUpdatedAt = new Date(row.updated_at).getTime();
         if (remoteUpdatedAt > dataRef.current.updatedAt) {
@@ -7620,35 +7828,24 @@ function App() {
     }
   }
 
-  // Cambiar de código de equipo cambia de "cajón": se cargan los datos locales de ese equipo
-  // (vacíos si es la primera vez en este dispositivo) y nunca se llevan los del equipo anterior.
-  // Solo al poner código por primera vez (desde el modo solo local) se conservan los datos
-  // que hubiera, porque son del propio usuario y es la forma de subirlos a su equipo.
-  function saveTeamCode(code) {
-    const prevCode = teamCodeRef.current;
-    if (code === prevCode) return;
-    if (prevCode && pendingRef.current.length > 0) {
-      const n = pendingRef.current.length;
-      if (
-        !window.confirm(
-          `Hay ${n} cambio${n === 1 ? "" : "s"} del equipo "${prevCode}" sin subir todavía. ` +
-            `Se quedan guardados en este dispositivo y se subirán cuando vuelvas a entrar con ese código. ¿Cambiar de equipo?`
-        )
-      )
-        return;
-    }
-    // Para lo que estuviera en marcha del equipo anterior
+  // Cambiar de cuenta cambia de "cajón": se cargan los datos locales de esa cuenta (vacíos si
+  // es la primera vez en este dispositivo) y nunca se llevan los de la anterior. Lo pendiente
+  // de subir de la cuenta anterior se queda en su cola y se sube cuando vuelva a entrar.
+  // Solo al entrar desde el modo sin sesión se conservan los datos que hubiera (son del propio
+  // usuario en este dispositivo) si la cuenta aún no tiene nada aquí.
+  function switchOwner(id) {
+    const prevId = ownerRef.current;
+    if (id === prevId) return;
     if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     pushTimerRef.current = null;
     retryTimerRef.current = null;
     retryAttemptRef.current = 0;
 
-    const carryOver = !prevCode && code && localStorage.getItem(teamKey(DATA_KEY, code)) == null;
+    const carryOver = !prevId && id && localStorage.getItem(teamKey(DATA_KEY, id)) == null;
     const current = dataRef.current;
-    setStoredTeamCode(code);
-    setActiveTeamCode(code);
-    teamCodeRef.current = code;
+    setActiveTeamCode(id);
+    ownerRef.current = id;
     let next;
     if (carryOver) {
       next = current;
@@ -7662,10 +7859,79 @@ function App() {
     setPending(loadPending());
     setMatch(null);
     matchRef.current = null;
-    setView("home");
-    setTeamCodeState(code);
+    setView((v) => (v === "sync" ? v : "home"));
     setSyncStatus(computeStatus());
-    // La descarga de la nube la hace el efecto de tiempo real al cambiar `teamCode`
+    // La descarga de la nube la hace el efecto de tiempo real al cambiar `ownerId`
+  }
+
+  function handleAuthUser(user) {
+    const next = user ? { id: user.id, email: user.email || "" } : null;
+    const prevId = ownerRef.current;
+    if ((next ? next.id : "") !== prevId) switchOwner(next ? next.id : "");
+    setStoredAuthUser(next);
+    setAuthUser((cur) => (cur && next && cur.id === next.id && cur.email === next.email ? cur : next));
+  }
+
+  /* --- Cuenta (Supabase Auth, email + contraseña) --- */
+  function authErrorMessage(error) {
+    const msg = (error && error.message) || "";
+    if (/invalid login credentials/i.test(msg)) return "Email o contraseña incorrectos.";
+    if (/email not confirmed/i.test(msg)) return "Aún no has confirmado el email: revisa tu correo.";
+    if (/already registered|already been registered/i.test(msg)) return "Ya existe una cuenta con ese email: usa Entrar.";
+    if (/password should be at least/i.test(msg)) return "La contraseña debe tener al menos 6 caracteres.";
+    if (/fetch|network/i.test(msg)) return "Sin conexión: hace falta internet para entrar o crear la cuenta.";
+    return msg || "No se pudo completar.";
+  }
+
+  async function signIn(email, password) {
+    if (!supabaseRef.current) return { error: "Primero guarda la conexión con Supabase." };
+    const { data: res, error } = await supabaseRef.current.auth.signInWithPassword({ email, password });
+    if (error) return { error: authErrorMessage(error) };
+    if (res && res.user) handleAuthUser(res.user);
+    return { ok: true };
+  }
+
+  async function signUp(email, password) {
+    if (!supabaseRef.current) return { error: "Primero guarda la conexión con Supabase." };
+    const { data: res, error } = await supabaseRef.current.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    if (error) return { error: authErrorMessage(error) };
+    if (res && res.session && res.user) {
+      handleAuthUser(res.user);
+      return { ok: true };
+    }
+    return { info: "Cuenta creada. Te hemos enviado un email para confirmarla; después vuelve aquí y pulsa Entrar." };
+  }
+
+  async function signOut() {
+    if (!supabaseRef.current) return;
+    const n = pendingRef.current.length;
+    const msg =
+      n > 0
+        ? `Hay ${n} cambio${n === 1 ? "" : "s"} sin subir. Se quedan guardados en este dispositivo y se subirán cuando vuelvas a entrar con esta cuenta. ¿Cerrar sesión?`
+        : "¿Cerrar sesión en este dispositivo? Tus datos siguen en la nube y volverán al entrar.";
+    if (!window.confirm(msg)) return;
+    await supabaseRef.current.auth.signOut({ scope: "local" });
+    handleAuthUser(null);
+  }
+
+  async function resetPassword(email) {
+    if (!supabaseRef.current) return { error: "Primero guarda la conexión con Supabase." };
+    const { error } = await supabaseRef.current.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) return { error: authErrorMessage(error) };
+    return { info: "Te hemos enviado un email para cambiar la contraseña. Ábrelo en este dispositivo." };
+  }
+
+  async function promptNewPassword() {
+    const pwd = window.prompt("Escribe tu nueva contraseña (mínimo 6 caracteres):");
+    if (!pwd || !supabaseRef.current) return;
+    const { error } = await supabaseRef.current.auth.updateUser({ password: pwd });
+    window.alert(error ? authErrorMessage(error) : "Contraseña cambiada.");
   }
 
   function saveSupabaseConfig(url, key) {
@@ -7676,7 +7942,7 @@ function App() {
   // Escapes manuales para cuando el aviso automático de pérdida de datos no basta:
   // forzar que gane este dispositivo, o forzar que gane la nube.
   async function forcePushToCloud() {
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !ownerRef.current) return;
     if (
       !window.confirm(
         "Esto sobrescribirá los datos de la nube con los de este dispositivo, sin comprobaciones. ¿Continuar?"
@@ -7687,7 +7953,7 @@ function App() {
   }
 
   async function forcePullFromCloud() {
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !ownerRef.current) return;
     if (
       !window.confirm(
         "Esto sobrescribirá los datos de este dispositivo con los de la nube. ¿Continuar?"
@@ -7699,7 +7965,7 @@ function App() {
       const { data: row, error } = await supabaseRef.current
         .from(TABLE)
         .select("data, updated_at")
-        .eq("team_code", teamCodeRef.current)
+        .eq(OWNER_COL, ownerRef.current)
         .maybeSingle();
       if (error) throw error;
       if (row && row.data) {
@@ -7722,13 +7988,13 @@ function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
 
   async function loadHistory() {
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !ownerRef.current) return;
     setHistoryLoading(true);
     try {
       const { data: rows, error } = await supabaseRef.current
         .from(HISTORY_TABLE)
         .select("id, data, created_at")
-        .eq("team_code", teamCodeRef.current)
+        .eq(OWNER_COL, ownerRef.current)
         .order("created_at", { ascending: false })
         .limit(20);
       if (error) throw error;
@@ -7763,6 +8029,72 @@ function App() {
     dataRef.current = stamped;
     saveLocalData(stamped);
     await pushToSupabase(stamped, { force: true });
+  }
+
+  /* --- Copiar a la cuenta los datos de la época del código de equipo --- */
+  // Solo lee: la fila antigua de la nube y lo guardado en este dispositivo con ese código.
+  // No borra ni modifica nada de lo antiguo.
+  async function inspectLegacyData(code) {
+    const result = { cloud: null, local: null, cloudError: null };
+    try {
+      const raw = localStorage.getItem(teamKey(DATA_KEY, code));
+      if (raw) result.local = JSON.parse(raw);
+    } catch (e) {
+      /* sin copia local */
+    }
+    if (configured && window.supabase) {
+      // Cliente sin sesión (rol anon), que es el que tenía acceso a la tabla antigua
+      const read = async (withHeader) => {
+        const legacyClient = window.supabase.createClient(supabaseConfig.url, supabaseConfig.key, {
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "statix-legacy-anon" },
+          ...(withHeader ? { global: { headers: { "x-team-code": code } } } : {}),
+        });
+        return legacyClient.from(LEGACY_TABLE).select("data, updated_at").eq("team_code", code).maybeSingle();
+      };
+      try {
+        let res = await read(true);
+        if (res.error) res = await read(false);
+        if (res.error) throw res.error;
+        if (res.data && res.data.data) {
+          result.cloud = { ...res.data.data, updatedAt: new Date(res.data.updated_at).getTime() };
+        }
+      } catch (e) {
+        result.cloudError = (e && e.message) || "No se pudo leer la nube";
+      }
+    }
+    return result;
+  }
+
+  function downloadJSON(obj, name) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Copias de seguridad antes de copiar: lo que se va a copiar y lo que ya hubiera en la cuenta
+  function backupBeforeLegacyImport(source, code) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadJSON(source, `statix_backup_codigo_${pdfFileSlug(code)}_${stamp}.json`);
+    const cur = dataRef.current;
+    if ((cur.squad || []).length || (cur.matchesList || []).length) {
+      downloadJSON(cur, `statix_backup_cuenta_antes_de_copiar_${stamp}.json`);
+    }
+  }
+
+  function importLegacyData(source) {
+    const merged = {
+      ...emptyData(),
+      ...source,
+      squad: migrateSquadPositions(source.squad || []),
+      setPiecePositions: migrateSetPiecePositions(source.setPiecePositions || {}),
+    };
+    commit(merged);
   }
 
   /* --- Copia de seguridad manual (JSON) --- */
@@ -7818,18 +8150,18 @@ function App() {
 
   // Sincroniza al arrancar y suscribe a cambios en tiempo real
   useEffect(() => {
-    if (!supabaseRef.current || !teamCode) return;
+    if (!supabaseRef.current || !ownerId) return;
     pullFromSupabase();
 
     const channel = supabaseRef.current
-      .channel(`registro_partido_${teamCode}`)
+      .channel(`statix_user_${ownerId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: TABLE, filter: `team_code=eq.${teamCode}` },
+        { event: "*", schema: "public", table: TABLE, filter: `${OWNER_COL}=eq.${ownerId}` },
         (payload) => {
           const row = payload.new;
           if (!row || row.device_id === deviceId) return;
-          if (row.team_code !== teamCodeRef.current) return; // nunca datos de otro equipo
+          if (row[OWNER_COL] !== ownerRef.current) return; // nunca datos de otra cuenta
           const remoteUpdatedAt = new Date(row.updated_at).getTime();
           if (pendingRef.current.length > 0) {
             flushQueue(); // fusiona lo del otro dispositivo con lo pendiente de este
@@ -7840,9 +8172,8 @@ function App() {
       )
       .subscribe();
 
-    // Respaldo del tiempo real: con el aislamiento por equipo aplicado en Supabase
-    // (supabase/aislamiento_por_equipo.sql) el canal deja de recibir avisos, así que se
-    // comprueba la nube cada 30 s mientras la app está a la vista.
+    // Respaldo del tiempo real (si el canal se corta o tarda): se comprueba la nube cada 30 s
+    // mientras la app está a la vista.
     const poll = setInterval(() => {
       if (!document.hidden && navigator.onLine) pullFromSupabase();
     }, 30000);
@@ -7853,7 +8184,7 @@ function App() {
       client.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teamCode, configured, supabaseConfig.url, supabaseConfig.key]);
+  }, [ownerId, configured, supabaseConfig.url, supabaseConfig.key]);
 
   // Reintenta al recuperar conexión / volver a la pestaña
   useEffect(() => {
@@ -7897,7 +8228,7 @@ function App() {
     dataRef.current = stamped;
     saveLocalData(stamped);
     enqueueChange(prev, stamped, !syncNow);
-    if (!supabaseRef.current || !teamCodeRef.current) return;
+    if (!supabaseRef.current || !ownerRef.current) return;
     if (!navigator.onLine) {
       setSyncStatus("offline");
       return;
@@ -8262,6 +8593,7 @@ function App() {
       <div style={isTabView ? { paddingBottom: 64 } : undefined}>
         {view === "home" && (
           <Home
+            needsLogin={configured && !authUser}
             teamName={team.name}
             crests={data.crests}
             onSaveCrest={saveCrest}
@@ -8306,12 +8638,19 @@ function App() {
           <SyncSettings
             status={syncStatus}
             display={syncView}
-            teamCode={teamCode}
+            authUser={authUser}
             lastSyncedAt={lastSyncedAt}
             supabaseUrl={supabaseConfig.url}
             supabaseKey={supabaseConfig.key}
             configured={configured}
-            onSaveTeamCode={saveTeamCode}
+            onSignIn={signIn}
+            onSignUp={signUp}
+            onSignOut={signOut}
+            onResetPassword={resetPassword}
+            onInspectLegacy={inspectLegacyData}
+            onBackupLegacy={backupBeforeLegacyImport}
+            onImportLegacy={importLegacyData}
+            accountData={data}
             onSaveConfig={saveSupabaseConfig}
             onSyncNow={pullFromSupabase}
             onForcePush={forcePushToCloud}
@@ -8403,9 +8742,11 @@ function App() {
   );
 }
 
-// Antes de arrancar: fija el equipo activo y mueve los datos antiguos (sin código) a sus claves
-setActiveTeamCode(getStoredTeamCode());
+// Antes de arrancar: los datos muy antiguos (sin código) pasan a las claves de su código de
+// equipo, donde quedan disponibles para copiarlos a una cuenta; y se activa la última cuenta
+// con sesión en este dispositivo (así se abre con sus datos también sin conexión).
 migrateUnscopedStorage(getStoredTeamCode(), [DATA_KEY, PENDING_KEY, LAST_REMOTE_KEY, LEAGUE_CACHE_KEY, PITCH_BOARD_KEY]);
+setActiveTeamCode((getStoredAuthUser() || {}).id || "");
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
