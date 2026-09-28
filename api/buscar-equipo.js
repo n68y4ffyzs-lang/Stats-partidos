@@ -26,7 +26,8 @@ async function fetchJsonWithRetry(url, attempts = 3, delayMs = 700) {
     try {
       const r = await fetch(url, { headers: FFCV_HEADERS });
       const data = await r.json();
-      if (data && data.estado === "1") return data;
+      // Los filtros traen estado "1"; los resultados de una jornada no, pero sí la lista de partidos
+      if (data && (data.estado === "1" || Array.isArray(data.partidos))) return data;
       lastError = (data && (data.reason || data.error)) || "Respuesta inesperada de la FFCV";
     } catch (e) {
       lastError = e.message || lastError;
