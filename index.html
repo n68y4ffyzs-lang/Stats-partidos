@@ -697,7 +697,16 @@ function getDeviceId() {
   return id;
 }
 
-// Última cuenta con sesión en este dispositivo ({ id, email }): permite abrir la app y ver sus
+// Tipo de cuenta: "owner" (el administrador, con todas las opciones técnicas en Ajustes) o
+// "client" (el resto). Se guarda en app_metadata.account_type del usuario en Supabase, que solo
+// se puede cambiar desde el panel/SQL de Supabase, no desde la app (supabase/paso5_cuenta_owner.sql).
+// Solo decide qué se ve en Ajustes: la protección de los datos la dan las reglas RLS por cuenta.
+function accountTypeOf(user) {
+  const t = user && user.app_metadata && user.app_metadata.account_type;
+  return t === "owner" ? "owner" : "client";
+}
+
+// Última cuenta con sesión en este dispositivo ({ id, email, accountType }): permite abrir la app y ver sus
 // datos sin conexión aunque la sesión de Supabase no se pueda renovar en ese momento.
 function getStoredAuthUser() {
   try {
@@ -710,7 +719,7 @@ function getStoredAuthUser() {
 
 function setStoredAuthUser(user) {
   try {
-    if (user) localStorage.setItem(AUTH_USER_KEY, JSON.stringify({ id: user.id, email: user.email || "" }));
+    if (user) localStorage.setItem(AUTH_USER_KEY, JSON.stringify({ id: user.id, email: user.email || "", accountType: user.accountType || "client" }));
     else localStorage.removeItem(AUTH_USER_KEY);
   } catch (e) {
     /* no crítico */
@@ -1089,6 +1098,113 @@ function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
   );
 }
 
+// Primera vez con una cuenta sin equipo: buscador por nombre (como "Buscar por rival", pero
+// contra la FFCV). Al elegir el equipo la app se configura sola: escudo, clasificación y calendario.
+function TeamSetup({ onChoose, onSkip }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [choosing, setChoosing] = useState(null);
+  const [notFound, setNotFound] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 3) {
+      setResults(null);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    const t = setTimeout(() => {
+      fetch(`/api/buscar-equipo?q=${encodeURIComponent(q)}`)
+        .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
+        .then(({ ok, body }) => {
+          if (cancelled) return;
+          if (!ok || body.error) throw new Error(body.error || "No se pudo buscar en la FFCV");
+          setResults(body.equipos || []);
+          setError(null);
+        })
+        .catch((e) => !cancelled && setError(e.message))
+        .finally(() => !cancelled && setLoading(false));
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query]);
+
+  async function choose(team) {
+    setChoosing(team);
+    const group = await onChoose(team);
+    if (group) onSkip();
+    else setNotFound(true);
+  }
+
+  const dim = { color: "var(--chalk-dim)" };
+  return (
+    <div className="mp-app" style={{ position: "fixed", inset: 0, zIndex: 60, overflowY: "auto", background: "var(--pitch)" }}>
+      <div className="max-w-md mx-auto p-4 pb-10">
+        <h1 className="display text-2xl font-semibold pt-2 mb-1">Busca tu equipo</h1>
+        <p className="text-sm mb-4" style={dim}>
+          Escribe el nombre de tu club y elige tu equipo. La app traerá su escudo, la clasificación
+          y el calendario de la FFCV.
+        </p>
+
+        {choosing ? (
+          <div className="mp-card p-4 text-sm">
+            {notFound ? (
+              <>
+                <div className="mb-3">
+                  Hemos guardado <span className="font-semibold">{choosing.nombre}</span>, pero no
+                  encontramos su liga en la FFCV: la clasificación y el calendario no estarán disponibles.
+                </div>
+                <button onClick={onSkip} className="mp-btn mp-btn-primary w-full py-2.5 font-semibold">Continuar</button>
+              </>
+            ) : (
+              <div>Configurando <span className="font-semibold">{choosing.nombre}</span>… (escudo, clasificación y calendario)</div>
+            )}
+          </div>
+        ) : (
+          <>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar tu equipo… (p. ej. Nou Jove)"
+              className="mp-input px-3 py-2 w-full mb-3"
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect="off"
+            />
+            {loading && <div className="text-xs mb-2" style={dim}>Buscando en la FFCV…</div>}
+            {error && <div className="text-xs mb-2" style={{ color: "var(--crimson)" }}>{error}</div>}
+            {results && results.length === 0 && !loading && (
+              <div className="text-xs mb-2" style={dim}>No hay equipos con ese nombre esta temporada.</div>
+            )}
+            <div className="flex flex-col gap-2">
+              {(results || []).map((t) => (
+                <button key={t.codequipo} onClick={() => choose(t)} className="mp-card flex items-center gap-3 px-3 py-2 text-left">
+                  {t.escudo ? (
+                    <img src={`/api/escudo?p=${encodeURIComponent(t.escudo)}`} alt="" loading="lazy" width={32} height={32} style={{ objectFit: "contain" }} />
+                  ) : (
+                    <span style={{ width: 32 }} />
+                  )}
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold truncate">{t.nombre}</span>
+                    <span className="block text-xs truncate" style={dim}>{t.categoria}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <button onClick={onSkip} className="text-xs mt-4" style={dim}>Ahora no</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Ajustes → Cuenta: entrar, crear cuenta, recuperar contraseña y cerrar sesión
 function AccountCard({ authUser, configured, onSignIn, onSignUp, onSignOut, onResetPassword }) {
   const [email, setEmail] = useState("");
@@ -1298,6 +1414,47 @@ function LegacyImportCard({ accountData, onInspect, onBackup, onImport }) {
   );
 }
 
+function SupabaseConnectionCard({ url, setUrl, keyValue, setKey, onSaveConfig }) {
+  const key = keyValue;
+  return (
+      <div className="mp-card p-3 mb-4">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+          Conexión con Supabase
+        </label>
+        <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
+          Pega aquí la Project URL y la anon public key de tu proyecto de Supabase
+          (Project Settings → API). Se guardan solo en este dispositivo, tendrás que
+          pegarlas también en el iPad y en el ordenador.
+        </p>
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Project URL</label>
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://tuproyecto.supabase.co"
+          className="mp-input px-3 py-2 w-full mt-1 mb-2"
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Anon public key</label>
+        <input
+          value={keyValue}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="eyJhbGciOi..."
+          className="mp-input px-3 py-2 w-full mt-1"
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+        <button
+          onClick={() => onSaveConfig(url.trim(), key.trim())}
+          disabled={!url.trim() || !key.trim()}
+          className="mp-btn mp-btn-primary w-full py-2.5 mt-3 font-semibold disabled:opacity-40"
+        >
+          Guardar conexión
+        </button>
+      </div>
+  );
+}
+
 function SyncSettings({
   status,
   display,
@@ -1326,6 +1483,7 @@ function SyncSettings({
   onImportJSON,
   ratingConfig,
   onSaveRatingConfig,
+  isOwner,
   team,
   crests,
   onSaveTeam,
@@ -1346,6 +1504,55 @@ function SyncSettings({
     const file = e.target.files && e.target.files[0];
     e.target.value = "";
     if (file) onImportJSON(file);
+  }
+
+  // Sin sesión todavía no se sabe el tipo de cuenta: solo la cuenta (y la conexión si falta).
+  if (!authUser) {
+    return (
+      <div className="max-w-md mx-auto p-4 pb-10">
+        <div className="flex items-center gap-3 mb-6 pt-2">
+          <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+            Volver
+          </button>
+          <h1 className="display text-2xl font-semibold">Ajustes</h1>
+        </div>
+        <AccountCard
+          authUser={authUser}
+          configured={configured}
+          onSignIn={onSignIn}
+          onSignUp={onSignUp}
+          onSignOut={onSignOut}
+          onResetPassword={onResetPassword}
+        />
+        {!configured && (
+          <SupabaseConnectionCard url={url} setUrl={setUrl} keyValue={key} setKey={setKey} onSaveConfig={onSaveConfig} />
+        )}
+      </div>
+    );
+  }
+
+  // Cuentas client: solo la cuenta y la tabla de puntuación. Todo lo técnico (conexión,
+  // copias, forzar sincronización, histórico, traer datos antiguos...) es solo para el owner.
+  if (authUser && !isOwner) {
+    return (
+      <div className="max-w-md mx-auto p-4 pb-10">
+        <div className="flex items-center gap-3 mb-6 pt-2">
+          <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+            Volver
+          </button>
+          <h1 className="display text-2xl font-semibold">Ajustes</h1>
+        </div>
+        <AccountCard
+          authUser={authUser}
+          configured={configured}
+          onSignIn={onSignIn}
+          onSignUp={onSignUp}
+          onSignOut={onSignOut}
+          onResetPassword={onResetPassword}
+        />
+        <RatingSettings config={ratingConfig} onSave={onSaveRatingConfig} />
+      </div>
+    );
   }
 
   return (
@@ -1377,41 +1584,7 @@ function SyncSettings({
         <TeamProfileCard key={ownerId} team={team} crests={crests} onSave={onSaveTeam} onSaveCrest={onSaveCrest} />
       )}
 
-      <div className="mp-card p-3 mb-4">
-        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-          Conexión con Supabase
-        </label>
-        <p className="text-xs mt-1 mb-2" style={{ color: "var(--chalk-dim)" }}>
-          Pega aquí la Project URL y la anon public key de tu proyecto de Supabase
-          (Project Settings → API). Se guardan solo en este dispositivo, tendrás que
-          pegarlas también en el iPad y en el ordenador.
-        </p>
-        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Project URL</label>
-        <input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://tuproyecto.supabase.co"
-          className="mp-input px-3 py-2 w-full mt-1 mb-2"
-          autoCapitalize="none"
-          autoCorrect="off"
-        />
-        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Anon public key</label>
-        <input
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder="eyJhbGciOi..."
-          className="mp-input px-3 py-2 w-full mt-1"
-          autoCapitalize="none"
-          autoCorrect="off"
-        />
-        <button
-          onClick={() => onSaveConfig(url.trim(), key.trim())}
-          disabled={!url.trim() || !key.trim()}
-          className="mp-btn mp-btn-primary w-full py-2.5 mt-3 font-semibold disabled:opacity-40"
-        >
-          Guardar conexión
-        </button>
-      </div>
+      <SupabaseConnectionCard url={url} setUrl={setUrl} keyValue={key} setKey={setKey} onSaveConfig={onSaveConfig} />
 
       <AccountCard
         authUser={authUser}
@@ -7555,6 +7728,11 @@ function App() {
   const [match, setMatch] = useState(null);
   const [authUser, setAuthUser] = useState(getStoredAuthUser);
   const ownerId = authUser ? authUser.id : "";
+  const isOwnerAccount = !!authUser && authUser.accountType === "owner";
+  // Cuenta cuyos datos ya se han contrastado con la nube en esta sesión (hasta entonces no se
+  // sabe si ya tiene equipo elegido, así que no se muestra el buscador de equipo)
+  const [cloudCheckedFor, setCloudCheckedFor] = useState("");
+  const [skipTeamSetup, setSkipTeamSetup] = useState(false);
   const [supabaseConfig, setSupabaseConfig] = useState(getStoredSupabaseConfig);
   const [syncStatus, setSyncStatus] = useState("unconfigured");
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
@@ -7595,6 +7773,21 @@ function App() {
     }
   }, [configured, supabaseConfig.url, supabaseConfig.key]);
 
+  // Conexión con Supabase para dispositivos nuevos: si no hay una guardada, se pide a /api/config
+  // (variables de entorno de Vercel). Si no está configurada allí, se sigue pidiendo a mano.
+  useEffect(() => {
+    if (configured) return;
+    fetch("/api/config")
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((cfg) => {
+        if (cfg && isValidSupabaseConfig(cfg.url, cfg.anonKey) && !isValidSupabaseConfig(getStoredSupabaseConfig().url, getStoredSupabaseConfig().key)) {
+          saveSupabaseConfig(cfg.url, cfg.anonKey);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured]);
+
   // Sesión: al entrar se cargan los datos de esa cuenta; solo un cierre de sesión real
   // (SIGNED_OUT) la quita. Sin conexión no se pierde la sesión, aunque no se pueda renovar.
   useEffect(() => {
@@ -7602,7 +7795,14 @@ function App() {
     if (!client) return;
     let cancelled = false;
     client.auth.getSession().then(({ data }) => {
-      if (!cancelled && data && data.session && data.session.user) handleAuthUser(data.session.user);
+      if (cancelled || !data || !data.session || !data.session.user) return;
+      handleAuthUser(data.session.user);
+      // El tipo de cuenta puede haber cambiado en Supabase: se pide el usuario actualizado
+      if (navigator.onLine) {
+        client.auth.getUser().then(({ data: fresh }) => {
+          if (!cancelled && fresh && fresh.user && fresh.user.id === data.session.user.id) handleAuthUser(fresh.user);
+        }).catch(() => {});
+      }
     });
     const { data: sub } = client.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT") handleAuthUser(null);
@@ -7804,6 +8004,7 @@ function App() {
         }
       }
       result = await pushToSupabase(toUpload);
+      if (result === "ok") setCloudCheckedFor(code);
     } catch (e) {
       console.error("Error subiendo cambios pendientes", e);
       setSyncStatus(navigator.onLine ? "error" : "offline");
@@ -7877,6 +8078,7 @@ function App() {
       }
       setSyncStatus("synced");
       setLastSyncedAt(Date.now());
+      setCloudCheckedFor(code);
     } catch (e) {
       console.error("Error sincronizando con Supabase", e);
       setSyncStatus("error");
@@ -7920,11 +8122,13 @@ function App() {
   }
 
   function handleAuthUser(user) {
-    const next = user ? { id: user.id, email: user.email || "" } : null;
+    const next = user ? { id: user.id, email: user.email || "", accountType: accountTypeOf(user) } : null;
     const prevId = ownerRef.current;
     if ((next ? next.id : "") !== prevId) switchOwner(next ? next.id : "");
     setStoredAuthUser(next);
-    setAuthUser((cur) => (cur && next && cur.id === next.id && cur.email === next.email ? cur : next));
+    setAuthUser((cur) =>
+      cur && next && cur.id === next.id && cur.email === next.email && cur.accountType === next.accountType ? cur : next
+    );
   }
 
   /* --- Cuenta (Supabase Auth, email + contraseña) --- */
@@ -8321,6 +8525,41 @@ function App() {
     commit({ ...dataRef.current, squad: updatedSquad });
   }
 
+  // Buscador de equipo (cuentas nuevas): con el equipo elegido se averigua su grupo de liga y
+  // se guardan nombre, códigos FFCV y duración de las partes; después se traen su escudo, los
+  // escudos de los rivales y el calendario. La clasificación sale sola con el grupo guardado.
+  async function chooseFfcvTeam(t) {
+    let group = null;
+    try {
+      const r = await fetch(
+        `/api/buscar-equipo?codequipo=${encodeURIComponent(t.codequipo)}&categoria=${encodeURIComponent(t.codigoCategoria)}`
+      );
+      const body = await r.json();
+      if (r.ok && body.codGrupo) group = body;
+    } catch (e) {
+      /* sin grupo: se guarda igualmente el equipo */
+    }
+    saveTeamProfile({
+      name: t.nombre,
+      ffcvTeamCode: t.codequipo,
+      ffcvGroupCode: group ? group.codGrupo : "",
+      ...(group && group.halfLength ? { defaultHalfLength: group.halfLength } : {}),
+    });
+    if (t.escudo) {
+      try {
+        const ir = await fetch("/api/escudo?p=" + encodeURIComponent(t.escudo));
+        if (ir.ok) await saveCrest("own", null, await resizeCrest(await ir.blob()));
+      } catch (e) {
+        /* sin escudo: se puede elegir a mano en Inicio */
+      }
+    }
+    if (group) {
+      importFfcvCrests();
+      importFfcvCalendar();
+    }
+    return group;
+  }
+
   // Perfil del equipo (nombre, FFCV, duración por defecto): viaja con el resto de datos
   function saveTeamProfile(profile) {
     commit({ ...dataRef.current, team: { ...normalizeTeamProfile(dataRef.current.team), ...profile } });
@@ -8666,11 +8905,14 @@ function App() {
       .sort((a, b) => (a.date > b.date ? 1 : -1))[0] || null;
   const seasonHighlights = computeSeasonHighlights(Object.values(data.matchesById), data.squad);
   const syncView = syncDisplay(syncStatus, online, pendingCount);
+  const showTeamSetup =
+    !!authUser && configured && cloudCheckedFor === ownerId && !team.ffcvTeamCode && !skipTeamSetup;
 
   return (
     <RatingConfigContext.Provider value={ratingConfig}>
     <div className="mp-app">
       <GlobalStyles />
+      {showTeamSetup && <TeamSetup onChoose={chooseFfcvTeam} onSkip={() => setSkipTeamSetup(true)} />}
       <div style={isTabView ? { paddingBottom: 64 } : undefined}>
         {view === "home" && (
           <Home
@@ -8744,6 +8986,7 @@ function App() {
             onImportJSON={importJSON}
             ratingConfig={ratingConfig}
             onSaveRatingConfig={saveRatingConfig}
+            isOwner={isOwnerAccount}
             team={team}
             crests={data.crests}
             onSaveTeam={saveTeamProfile}
