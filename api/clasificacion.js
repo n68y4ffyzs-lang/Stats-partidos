@@ -13,10 +13,8 @@ const FFCV_HEADERS = {
   Referer: "https://ffcv.es/competiciones/",
 };
 
-// Grupo de liga por defecto: Primera Cadet (Futbol-11), Grup - 1, temporada 2026-2027.
-// La FFCV crea un cod_grupo nuevo cada temporada: actualizar este código a principios
-// de cada temporada (o si el equipo cambia de grupo o categoría).
-const DEFAULT_COD_GRUPO = "905431893";
+// El grupo (cod_grupo) lo manda la app: es un dato de cada equipo que se configura en
+// Ajustes → Mi equipo. La FFCV crea un cod_grupo nuevo cada temporada.
 
 async function fetchJsonWithRetry(url, attempts = 4, delayMs = 900) {
   let lastError = "No se pudo obtener respuesta de la FFCV";
@@ -58,7 +56,11 @@ async function resolveCurrentJornada(codGrupo) {
 
 module.exports = async (req, res) => {
   try {
-    const codGrupo = (req.query && req.query.cod_grupo) || DEFAULT_COD_GRUPO;
+    const codGrupo = String((req.query && req.query.cod_grupo) || "");
+    if (!/^\d+$/.test(codGrupo)) {
+      res.status(400).json({ error: "Falta el código de grupo de la FFCV (configúralo en Ajustes → Mi equipo)" });
+      return;
+    }
     let codJornada = req.query && req.query.cod_jornada ? Number(req.query.cod_jornada) : null;
 
     if (!codJornada) {

@@ -12,10 +12,8 @@ const FFCV_HEADERS = {
   Referer: "https://ffcv.es/competiciones/",
 };
 
-// Grupo y equipo por defecto: Primera Cadet (Futbol-11), Grup - 1, temporada 2026-2027,
-// C.F. Nou Jove Castelló 'A'. Actualizar cada temporada si hace falta.
-const DEFAULT_COD_GRUPO = "905431893";
-const DEFAULT_COD_EQUIPO = "903635134";
+// El grupo (cod_grupo) y el equipo (cod_equipo) los manda la app: son datos de cada equipo
+// que se configuran en Ajustes → Mi equipo.
 
 const config = { maxDuration: 30 };
 
@@ -46,8 +44,12 @@ function ddmmyyyyToIso(str) {
 
 module.exports = async (req, res) => {
   try {
-    const codGrupo = (req.query && req.query.cod_grupo) || DEFAULT_COD_GRUPO;
-    const codEquipo = String((req.query && req.query.cod_equipo) || DEFAULT_COD_EQUIPO);
+    const codGrupo = String((req.query && req.query.cod_grupo) || "");
+    const codEquipo = String((req.query && req.query.cod_equipo) || "");
+    if (!/^\d+$/.test(codGrupo) || !/^\d+$/.test(codEquipo)) {
+      res.status(400).json({ error: "Faltan los códigos de grupo y equipo de la FFCV (configúralos en Ajustes → Mi equipo)" });
+      return;
+    }
 
     const jornadasData = await fetchJsonWithRetry(`${FFCV_BASE}/filtros/jornadas_fetch.php?cod_grupo=${codGrupo}`);
     const jornadas = Array.isArray(jornadasData.jornadas) ? jornadasData.jornadas : [];

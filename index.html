@@ -108,8 +108,14 @@ const EVENT_TYPES = [
   { id: "gol_encajado", label: "Gol encajado", group: "portero" },
 ];
 
-// Dorsales que se consideran de portero: al seleccionarlos aparecen los eventos del grupo "portero"
+// Portero: el que tiene la posición PT en Plantilla (dato de cada equipo). Solo si un jugador
+// no tiene posición se recurre a los dorsales habituales de portero.
 const GOALKEEPER_NUMBERS = ["1", "13"];
+function isGoalkeeper(player) {
+  if (!player) return false;
+  if (player.position) return player.position === "PT";
+  return GOALKEEPER_NUMBERS.includes(String(player.number));
+}
 
 // Tipos de gol que cuentan como balón parado, y todos los tipos de gol (para el marcador y los porcentajes)
 const SET_PIECE_GOAL_TYPES = ["gol_corner", "gol_falta", "gol_penalti"];
@@ -290,6 +296,63 @@ const TEAM_CODE_KEY = "rp_team_code";
 const DEVICE_ID_KEY = "rp_device_id";
 const PENDING_KEY = "rp_pending_sync";
 const LAST_REMOTE_KEY = "rp_last_remote_updated_at";
+
+/* Aislamiento por equipo en este dispositivo: todo lo que es de un equipo (datos, cola de
+   pendientes, pizarra, caché de la clasificación...) se guarda bajo una clave con su código
+   de equipo, así que entrar con otro código nunca enseña ni sube los datos del anterior.
+   Sin código (modo solo local) se usa la clave sin sufijo. */
+let activeTeamCode = "";
+
+function teamKey(base, code = activeTeamCode) {
+  return code ? `${base}::${code}` : base;
+}
+
+function setActiveTeamCode(code) {
+  activeTeamCode = code || "";
+}
+
+// Antes todo se guardaba sin código de equipo: la primera vez, eso pertenece al equipo con el
+// que estaba configurado el dispositivo y se mueve a sus claves.
+function migrateUnscopedStorage(code, baseKeys) {
+  if (!code) return;
+  baseKeys.forEach((base) => {
+    try {
+      const legacy = localStorage.getItem(base);
+      if (legacy != null && localStorage.getItem(teamKey(base, code)) == null) {
+        localStorage.setItem(teamKey(base, code), legacy);
+      }
+      if (legacy != null) localStorage.removeItem(base);
+    } catch (e) {
+      console.error("Error migrando datos locales al código de equipo", e);
+    }
+  });
+}
+
+// Perfil del equipo: viaja dentro de los datos (sincronizado por código de equipo) y se edita
+// en Ajustes o con el importador de la FFCV.
+function emptyTeamProfile() {
+  return { name: "", ffcvGroupCode: "", ffcvTeamCode: "", defaultHalfLength: 45 };
+}
+
+// Los datos de antes de existir el perfil eran todos del C.F. Nou Jove Castelló 'A' (los
+// códigos FFCV estaban fijos en el código): se les asigna ese perfil una sola vez y a partir
+// de ahí es editable. Los equipos nuevos empiezan con el perfil vacío.
+const LEGACY_TEAM_PROFILE = {
+  name: "C.F. Nou Jove Castelló 'A'",
+  ffcvGroupCode: "905431893",
+  ffcvTeamCode: "903635134",
+  defaultHalfLength: 40,
+};
+
+function normalizeTeamProfile(team) {
+  if (!team) return { ...LEGACY_TEAM_PROFILE };
+  return { ...emptyTeamProfile(), ...team };
+}
+
+// Datos de un equipo que empieza de cero en este dispositivo
+function freshTeamData() {
+  return { ...emptyData(), team: emptyTeamProfile() };
+}
 
 function emptyData() {
   return {
@@ -587,10 +650,11 @@ function migrateSquadPositions(squad) {
 
 function loadLocalData() {
   try {
-    const raw = localStorage.getItem(DATA_KEY);
-    if (!raw) return emptyData();
+    const raw = localStorage.getItem(teamKey(DATA_KEY));
+    if (!raw) return freshTeamData();
     const parsed = JSON.parse(raw);
     return {
+      ...(parsed.team ? { team: parsed.team } : {}),
       squad: migrateSquadPositions(parsed.squad || []),
       matchesList: parsed.matchesList || [],
       matchesById: parsed.matchesById || {},
@@ -605,13 +669,13 @@ function loadLocalData() {
       updatedAt: parsed.updatedAt || 0,
     };
   } catch (e) {
-    return emptyData();
+    return freshTeamData();
   }
 }
 
 function saveLocalData(data) {
   try {
-    localStorage.setItem(DATA_KEY, JSON.stringify(data));
+    localStorage.setItem(teamKey(DATA_KEY), JSON.stringify(data));
   } catch (e) {
     console.error("Error guardando en localStorage", e);
   }
@@ -648,7 +712,7 @@ function setStoredTeamCode(code) {
 --------------------------------------------------------- */
 function loadPending() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(PENDING_KEY) || "[]");
+    const parsed = JSON.parse(localStorage.getItem(teamKey(PENDING_KEY)) || "[]");
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
     return [];
@@ -657,8 +721,8 @@ function loadPending() {
 
 function savePending(entries) {
   try {
-    if (entries.length) localStorage.setItem(PENDING_KEY, JSON.stringify(entries));
-    else localStorage.removeItem(PENDING_KEY);
+    if (entries.length) localStorage.setItem(teamKey(PENDING_KEY), JSON.stringify(entries));
+    else localStorage.removeItem(teamKey(PENDING_KEY));
   } catch (e) {
     console.error("Error guardando la cola de sincronización", e);
   }
@@ -666,12 +730,12 @@ function savePending(entries) {
 
 // updated_at de la nube la última vez que este dispositivo quedó al día con ella
 function getLastRemoteUpdatedAt() {
-  return Number(localStorage.getItem(LAST_REMOTE_KEY)) || 0;
+  return Number(localStorage.getItem(teamKey(LAST_REMOTE_KEY))) || 0;
 }
 
 function setLastRemoteUpdatedAt(ts) {
   try {
-    localStorage.setItem(LAST_REMOTE_KEY, String(ts || 0));
+    localStorage.setItem(teamKey(LAST_REMOTE_KEY), String(ts || 0));
   } catch (e) {
     /* no crítico */
   }
@@ -897,6 +961,107 @@ function SyncBadge({ status, onClick }) {
 /* ---------------------------------------------------------
    Pantalla: Sincronización
 --------------------------------------------------------- */
+// Ajustes → Mi equipo: nombre del club, escudo, duración por defecto de cada parte y grupo /
+// equipo de la FFCV (clasificación, calendario y escudos). Todo es del código de equipo activo.
+function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
+  const [name, setName] = useState(team.name);
+  const [halfLength, setHalfLength] = useState(team.defaultHalfLength);
+  const [groupCode, setGroupCode] = useState(team.ffcvGroupCode);
+  const [teamCode, setTeamCode] = useState(team.ffcvTeamCode);
+  const [groupTeams, setGroupTeams] = useState(null);
+  const [lookup, setLookup] = useState({ loading: false, error: null });
+
+  useEffect(() => {
+    setName(team.name);
+    setHalfLength(team.defaultHalfLength);
+    setGroupCode(team.ffcvGroupCode);
+    setTeamCode(team.ffcvTeamCode);
+  }, [team.name, team.defaultHalfLength, team.ffcvGroupCode, team.ffcvTeamCode]);
+
+  const dirty =
+    name.trim() !== team.name ||
+    Number(halfLength) !== team.defaultHalfLength ||
+    groupCode.trim() !== team.ffcvGroupCode ||
+    teamCode.trim() !== team.ffcvTeamCode;
+
+  function findTeams() {
+    const g = groupCode.trim();
+    if (!/^\d+$/.test(g)) {
+      setLookup({ loading: false, error: "El código de grupo son solo números." });
+      return;
+    }
+    setLookup({ loading: true, error: null });
+    fetch(`/api/clasificacion?cod_grupo=${encodeURIComponent(g)}`)
+      .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok || body.error) throw new Error(body.error || "No se pudo consultar la FFCV");
+        setGroupTeams({ label: `${body.competicion || ""} · ${body.grupo || ""}`, teams: body.clasificacion || [] });
+        setLookup({ loading: false, error: null });
+      })
+      .catch((e) => setLookup({ loading: false, error: e.message }));
+  }
+
+  function pickTeam(code) {
+    setTeamCode(code);
+    const t = groupTeams && groupTeams.teams.find((x) => x.codequipo === code);
+    if (t && !name.trim()) setName(t.nombre);
+  }
+
+  function save() {
+    onSave({
+      name: name.trim(),
+      defaultHalfLength: Math.min(Math.max(Number(halfLength) || 45, 10), 60),
+      ffcvGroupCode: groupCode.trim(),
+      ffcvTeamCode: teamCode.trim(),
+    });
+  }
+
+  const inputCls = "mp-input w-full px-3 py-2 text-sm";
+  const labelStyle = { color: "var(--chalk-dim)" };
+  return (
+    <div className="mp-card p-3 mb-4">
+      <label className="text-xs" style={labelStyle}>Mi equipo</label>
+      <div className="flex items-center gap-3 mt-2 mb-3">
+        <CrestPicker src={crests && crests.own} size={48} onPick={(url) => onSaveCrest("own", null, url)} label="Elegir el escudo de mi equipo" />
+        <div className="flex-1 min-w-0">
+          <div className="text-[11px] mb-1" style={labelStyle}>Nombre del club</div>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre de tu equipo" className={inputCls} />
+        </div>
+      </div>
+      <div className="text-[11px] mb-1" style={labelStyle}>Duración de cada parte por defecto (minutos)</div>
+      <input type="number" min={10} max={60} value={halfLength} onChange={(e) => setHalfLength(e.target.value)} className={inputCls + " mb-3"} />
+
+      <div className="text-[11px] mb-1" style={labelStyle}>
+        FFCV: código de grupo (el número <span className="font-semibold">cod_grupo</span> de la página de tu
+        competición en ffcv.es; cambia cada temporada)
+      </div>
+      <div className="flex gap-2 mb-2">
+        <input value={groupCode} onChange={(e) => setGroupCode(e.target.value)} inputMode="numeric" placeholder="p. ej. 905431893" className={inputCls} />
+        <button onClick={findTeams} disabled={lookup.loading || !groupCode.trim()} className="mp-btn mp-btn-outline px-3 py-2 text-xs shrink-0 disabled:opacity-40">
+          {lookup.loading ? "Buscando…" : "Buscar equipos"}
+        </button>
+      </div>
+      {lookup.error && <div className="text-xs mb-2" style={{ color: "var(--crimson)" }}>{lookup.error}</div>}
+      {groupTeams && (
+        <div className="mb-2">
+          <div className="text-[11px] mb-1" style={labelStyle}>{groupTeams.label} — elige tu equipo:</div>
+          <select value={teamCode} onChange={(e) => pickTeam(e.target.value)} className={inputCls}>
+            <option value="">Elige…</option>
+            {groupTeams.teams.map((t) => (
+              <option key={t.codequipo} value={t.codequipo}>{t.nombre}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="text-[11px] mb-1" style={labelStyle}>FFCV: código de equipo</div>
+      <input value={teamCode} onChange={(e) => setTeamCode(e.target.value)} inputMode="numeric" placeholder="Se rellena al elegir tu equipo" className={inputCls + " mb-3"} />
+      <button onClick={save} disabled={!dirty} className="mp-btn mp-btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-40">
+        {dirty ? "Guardar mi equipo" : "Guardado"}
+      </button>
+    </div>
+  );
+}
+
 function SyncSettings({
   status,
   display,
@@ -918,6 +1083,10 @@ function SyncSettings({
   onImportJSON,
   ratingConfig,
   onSaveRatingConfig,
+  team,
+  crests,
+  onSaveTeam,
+  onSaveCrest,
   onBack,
 }) {
   const [code, setCode] = useState(teamCode);
@@ -960,6 +1129,10 @@ function SyncSettings({
           </div>
         )}
       </div>
+
+      {team && onSaveTeam && (
+        <TeamProfileCard key={teamCode} team={team} crests={crests} onSave={onSaveTeam} onSaveCrest={onSaveCrest} />
+      )}
 
       <div className="mp-card p-3 mb-4">
         <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>
@@ -1307,31 +1480,33 @@ function RatingSettings({ config, onSave }) {
 /* ---------------------------------------------------------
    Clasificación de liga (FFCV) — vía proxy propio en /api/clasificacion
    para evitar el bloqueo CORS del navegador. No es una API oficial de
-   la FFCV: si deja de funcionar o el equipo cambia de grupo, hay que
-   actualizar DEFAULT_COD_GRUPO en api/clasificacion.js.
+   la FFCV. El grupo y el equipo son datos de cada equipo (Ajustes → Mi
+   equipo): si cambia de grupo o de temporada, se cambian ahí.
 --------------------------------------------------------- */
-const LEAGUE_TEAM_CODE = "903635134"; // C.F. Nou Jove Castelló 'A' — Primera Cadet, Grup 1
 const LEAGUE_CACHE_KEY = "rp_league_cache_v1";
 
 function loadLeagueCache() {
   try {
-    const raw = localStorage.getItem(LEAGUE_CACHE_KEY);
+    const raw = localStorage.getItem(teamKey(LEAGUE_CACHE_KEY));
     return raw ? JSON.parse(raw) : null;
   } catch (e) {
     return null;
   }
 }
 
-function saveLeagueCache(data) {
+function saveLeagueCache(data, groupCode) {
   try {
-    localStorage.setItem(LEAGUE_CACHE_KEY, JSON.stringify({ data, fetchedAt: Date.now() }));
+    localStorage.setItem(teamKey(LEAGUE_CACHE_KEY), JSON.stringify({ data, groupCode, fetchedAt: Date.now() }));
   } catch (e) {
     console.error("Error guardando la clasificación en caché", e);
   }
 }
 
-function LeagueStandings() {
-  const cached = useRef(loadLeagueCache()).current;
+function LeagueStandings({ team }) {
+  const groupCode = (team && team.ffcvGroupCode) || "";
+  const ourCode = (team && team.ffcvTeamCode) || "";
+  const loadedCache = useRef(loadLeagueCache()).current;
+  const cached = loadedCache && loadedCache.groupCode === groupCode ? loadedCache : null;
   const [data, setData] = useState(cached ? cached.data : null);
   const [fetchedAt, setFetchedAt] = useState(cached ? cached.fetchedAt : null);
   const [loading, setLoading] = useState(true);
@@ -1339,24 +1514,36 @@ function LeagueStandings() {
   const [expanded, setExpanded] = useState(false);
 
   const load = useCallback(() => {
+    if (!groupCode) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
-    fetch("/api/clasificacion")
+    fetch(`/api/clasificacion?cod_grupo=${encodeURIComponent(groupCode)}`)
       .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
       .then(({ ok, body }) => {
         if (!ok || body.error) throw new Error(body.error || "No se pudo cargar la clasificación");
         setData(body);
         setFetchedAt(Date.now());
-        saveLeagueCache(body);
+        saveLeagueCache(body, groupCode);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [groupCode]);
 
   useEffect(() => { load(); }, [load]);
 
+  if (!groupCode) {
+    return (
+      <div className="mp-card p-3 mb-6 text-xs" style={{ color: "var(--chalk-dim)" }}>
+        Clasificación: configura el grupo de la FFCV de tu equipo en Ajustes → Mi equipo.
+      </div>
+    );
+  }
+
   const rows = data ? data.clasificacion || [] : [];
-  const myRow = rows.find((r) => r.codequipo === LEAGUE_TEAM_CODE) || null;
+  const myRow = rows.find((r) => r.codequipo === ourCode) || null;
 
   return (
     <div className="mb-6">
@@ -1441,7 +1628,7 @@ function LeagueStandings() {
                 </thead>
                 <tbody>
                   {rows.map((r) => {
-                    const isUs = r.codequipo === LEAGUE_TEAM_CODE;
+                    const isUs = r.codequipo === ourCode;
                     return (
                       <tr key={r.codequipo} style={isUs ? { background: "rgba(111,190,68,0.15)" } : {}}>
                         <td className="p-1">{r.posicion}</td>
@@ -1619,6 +1806,7 @@ function MatchCalendar({ matches, crests, onOpenMatch }) {
    Pantalla: Partidos (pestaña "Partidos" de la barra inferior)
 --------------------------------------------------------- */
 function MatchesTab({
+  team,
   matches,
   crests,
   onOpenMatch,
@@ -1638,7 +1826,7 @@ function MatchesTab({
     <div className="max-w-md mx-auto p-4 pb-10">
       <h1 className="display text-2xl font-semibold mb-4 pt-2">Partidos</h1>
 
-      <LeagueStandings />
+      <LeagueStandings team={team} />
 
       <div className="flex items-center justify-end mb-2">
         <button
@@ -1804,7 +1992,7 @@ function BottomNav({ active, onNavigate }) {
 /* ---------------------------------------------------------
    Pantalla: Inicio (pestaña "Inicio" de la barra inferior)
 --------------------------------------------------------- */
-function Home({ crests, onSaveCrest, syncStatus, onGoSync, onNewMatch, nextMatch, onOpenMatch, highlights }) {
+function Home({ teamName, crests, onSaveCrest, syncStatus, onGoSync, onNewMatch, nextMatch, onOpenMatch, highlights }) {
   return (
     <div className="max-w-md mx-auto p-4 pb-10">
       <div className="flex items-center justify-between mb-4 pt-2">
@@ -1814,7 +2002,12 @@ function Home({ crests, onSaveCrest, syncStatus, onGoSync, onNewMatch, nextMatch
           onPick={(url) => onSaveCrest("own", null, url)}
           label="Elegir el escudo de mi equipo"
         />
-        <h1 className="display text-3xl font-semibold leading-none flex-1 min-w-0 mx-3">Statix</h1>
+        <div className="flex-1 min-w-0 mx-3">
+          <h1 className="display text-3xl font-semibold leading-none">Statix</h1>
+          {teamName && (
+            <div className="text-xs truncate mt-1" style={{ color: "var(--chalk-dim)" }}>{teamName}</div>
+          )}
+        </div>
         <SyncBadge status={syncStatus} onClick={onGoSync} />
       </div>
 
@@ -2447,10 +2640,10 @@ function cleanUncalled(desconvocados) {
   return out;
 }
 
-function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad }) {
+function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, defaultHalfLength = 45 }) {
   const [opponent, setOpponent] = useState("");
   const [date, setDate] = useState(todayISO());
-  const [halfLength, setHalfLength] = useState(45);
+  const [halfLength, setHalfLength] = useState(defaultHalfLength);
   const [titulares, setTitulares] = useState([]);
   const [desconvocados, setDesconvocados] = useState({});
   const [isHome, setIsHome] = useState(true);
@@ -2879,7 +3072,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
   ].sort((a, b) => (b.half - a.half) || (b.minute - a.minute) || (b.id > a.id ? 1 : -1));
 
   const selectedPlayer = selectedPlayerId ? playerById(selectedPlayerId) : null;
-  const isGoalkeeperSelected = !!selectedPlayer && GOALKEEPER_NUMBERS.includes(String(selectedPlayer.number));
+  const isGoalkeeperSelected = isGoalkeeper(selectedPlayer);
   const liveEventSections = LIVE_EVENT_SECTIONS.map((section) => ({
     title: section.title,
     events: section.ids.map((id) => EVENT_TYPES.find((ev) => ev.id === id)).filter(Boolean),
@@ -3920,7 +4113,7 @@ function TeamEventsPanel({ match, onUpdate }) {
 /* ---------------------------------------------------------
    Pantalla: Resumen
 --------------------------------------------------------- */
-function MatchSummary({ match, squad, crests, onBack, onExport, onUpdate }) {
+function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpdate }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [tab, setTab] = useState("resumen");
   const [showPlayerStats, setShowPlayerStats] = useState(false);
@@ -4008,7 +4201,7 @@ function MatchSummary({ match, squad, crests, onBack, onExport, onUpdate }) {
             Descargar CSV del partido
           </button>
 
-          <MatchPdfPanel match={match} squad={squad} crests={crests} />
+          <MatchPdfPanel match={match} squad={squad} crests={crests} teamName={teamName} />
 
           {onUpdate && <AddForgottenEvents match={match} squad={squad} onUpdate={onUpdate} />}
 
@@ -4595,7 +4788,7 @@ function pdfFileSlug(text) {
     .replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
 }
 
-function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId, ownCrest) {
+function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId, ownCrest, teamName) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const GREEN = [22, 36, 28];
@@ -4604,7 +4797,8 @@ function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId, ownCrest)
   const minutes = computeMatchMinutes(match);
   const { favor, contra } = matchGoals(match);
   const result = `${favor} - ${contra}`;
-  const subtitle = pdfSafe(`vs ${match.opponent} · ${match.date} · Resultado: ${result}`);
+  const vs = teamName ? `${teamName} vs ${match.opponent}` : `vs ${match.opponent}`;
+  const subtitle = pdfSafe(`${vs} · ${match.date} · Resultado: ${result}`);
   const rosterIds = [...new Set([...(match.onPitch || []), ...(match.bench || [])])];
   const players = rosterIds
     .map((id) => squad.find((p) => p.id === id))
@@ -4645,7 +4839,7 @@ function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId, ownCrest)
     header(`#${p.number} ${p.name}`);
     const rating = ratings[p.id];
     const st = computePlayerStats(p.id, match.events || []);
-    const isGk = GOALKEEPER_NUMBERS.includes(String(p.number));
+    const isGk = isGoalkeeper(p);
 
     // Nota y minutos, grandes
     doc.setDrawColor(...TURF);
@@ -4785,7 +4979,7 @@ function AddForgottenEvents({ match, squad, onUpdate }) {
   const [count, setCount] = useState(1);
 
   const player = rosterPlayers.find((p) => p.id === playerId);
-  const isGk = player && GOALKEEPER_NUMBERS.includes(String(player.number));
+  const isGk = isGoalkeeper(player);
   const detailMeta = EVENTS_WITH_DETAIL[type] && EVENTS_WITH_DETAIL[type].field !== "__type__" ? EVENTS_WITH_DETAIL[type] : null;
   // Para porteros, su grupo primero; los goles de balón parado ocultos sí se ofrecen aquí
   const groups = Object.keys(GROUP_META).sort((a, b) => (isGk ? (a === "portero" ? -1 : b === "portero" ? 1 : 0) : 0));
@@ -4907,7 +5101,7 @@ function AddForgottenEvents({ match, squad, onUpdate }) {
   );
 }
 
-function MatchPdfPanel({ match, squad, crests }) {
+function MatchPdfPanel({ match, squad, crests, teamName }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [busy, setBusy] = useState(false);
   const ratings = computeMatchRatings(match, squad, ratingConfig);
@@ -4923,7 +5117,7 @@ function MatchPdfPanel({ match, squad, crests }) {
     }
     setBusy(true);
     try {
-      const { doc, filename } = buildMatchReportPdf(match, squad, ratingConfig, playerId, crests && crests.own);
+      const { doc, filename } = buildMatchReportPdf(match, squad, ratingConfig, playerId, crests && crests.own, teamName);
       await shareOrDownloadPdf(doc, filename);
     } catch (e) {
       console.error("Error generando el PDF", e);
@@ -5065,7 +5259,7 @@ function PlayerStatsAccordion({ players, events, matches, ratings }) {
         .map((p) => {
           const open = openId === p.id;
           const s = computePlayerStats(p.id, events);
-          const isGoalkeeper = GOALKEEPER_NUMBERS.includes(String(p.number));
+          const isGoalkeeperPlayer = isGoalkeeper(p);
           const matchesPlayed = matches
             ? matches.filter((m) => !m.scheduled && (m.onPitch.includes(p.id) || m.bench.includes(p.id))).length
             : 0;
@@ -5087,7 +5281,7 @@ function PlayerStatsAccordion({ players, events, matches, ratings }) {
                   <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
                 </span>
               </button>
-              {open && !isGoalkeeper && (
+              {open && !isGoalkeeperPlayer && (
                 <div className="px-3 pb-3 flex flex-col gap-2">
                   {matches && (
                     <div className="flex items-center justify-between">
@@ -5145,7 +5339,7 @@ function PlayerStatsAccordion({ players, events, matches, ratings }) {
                   </div>
                 </div>
               )}
-              {open && isGoalkeeper && (
+              {open && isGoalkeeperPlayer && (
                 <div
                   className="px-3 pb-3 pt-2 flex flex-col gap-2"
                   style={{ borderTop: "1px solid rgba(244,241,232,0.08)" }}
@@ -6672,7 +6866,7 @@ const ERASER_RADIUS = 3;
 
 function loadPitchBoard() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(PITCH_BOARD_KEY) || "null");
+    const parsed = JSON.parse(localStorage.getItem(teamKey(PITCH_BOARD_KEY)) || "null");
     return { positions: parsed?.positions || {}, strokes: parsed?.strokes || [] };
   } catch (e) {
     return { positions: {}, strokes: [] };
@@ -6796,7 +6990,7 @@ function PitchScreen({ squad, crests, onBack }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem(PITCH_BOARD_KEY, JSON.stringify({ positions, strokes }));
+      localStorage.setItem(teamKey(PITCH_BOARD_KEY), JSON.stringify({ positions, strokes }));
     } catch (e) {}
   }, [positions, strokes]);
 
@@ -7147,13 +7341,17 @@ function App() {
   // Crea (o recrea) el cliente de Supabase cuando cambia la configuración
   useEffect(() => {
     if (configured && window.supabase) {
-      supabaseRef.current = window.supabase.createClient(supabaseConfig.url, supabaseConfig.key);
+      // La cabecera x-team-code permite que Supabase limite cada petición a las filas de este
+      // equipo (ver supabase/aislamiento_por_equipo.sql); sin ese SQL aplicado no cambia nada.
+      supabaseRef.current = window.supabase.createClient(supabaseConfig.url, supabaseConfig.key, {
+        global: { headers: { "x-team-code": teamCode || "" } },
+      });
       setSyncStatus(teamCodeRef.current ? "synced" : "no-code");
     } else {
       supabaseRef.current = null;
       setSyncStatus("unconfigured");
     }
-  }, [configured, supabaseConfig.url, supabaseConfig.key]);
+  }, [configured, supabaseConfig.url, supabaseConfig.key, teamCode]);
 
   /* --- Sincronización con Supabase --- */
 
@@ -7172,16 +7370,20 @@ function App() {
   // cola los cambios que ya iban incluidos en `stamped` (los hechos durante la subida se quedan).
   async function pushToSupabase(stamped, opts = {}) {
     if (!supabaseRef.current || !teamCodeRef.current) return "error";
+    // El código con el que empezó la subida: si el usuario cambia de equipo mientras tanto,
+    // estos datos no pueden acabar en la fila del otro equipo.
+    const code = teamCodeRef.current;
+    const client = supabaseRef.current;
     const coveredIds = new Set(
       pendingRef.current.filter((e) => e.at <= stamped.updatedAt).map((e) => e.id)
     );
     setSyncStatus("syncing");
     try {
       if (!opts.force) {
-        const { data: existing, error: fetchErr } = await supabaseRef.current
+        const { data: existing, error: fetchErr } = await client
           .from(TABLE)
           .select("data")
-          .eq("team_code", teamCodeRef.current)
+          .eq("team_code", code)
           .maybeSingle();
         if (fetchErr) throw fetchErr;
         const remoteData = existing && existing.data;
@@ -7205,20 +7407,22 @@ function App() {
           }
         }
       }
-      const { error } = await supabaseRef.current.from(TABLE).upsert({
-        team_code: teamCodeRef.current,
+      if (teamCodeRef.current !== code) return "stale";
+      const { error } = await client.from(TABLE).upsert({
+        team_code: code,
         data: stamped,
         device_id: deviceId,
         updated_at: new Date(stamped.updatedAt).toISOString(),
       });
       if (error) throw error;
       // Copia en el histórico: no crítica, no bloquea ni falla la sincronización si falla.
-      supabaseRef.current
+      client
         .from(HISTORY_TABLE)
-        .insert({ team_code: teamCodeRef.current, data: stamped, device_id: deviceId })
+        .insert({ team_code: code, data: stamped, device_id: deviceId })
         .then(({ error: histError }) => {
           if (histError) console.error("Error guardando histórico", histError);
         });
+      if (teamCodeRef.current !== code) return "stale";
       setLastRemoteUpdatedAt(stamped.updatedAt);
       removePending(coveredIds);
       setSyncStatus("synced");
@@ -7299,6 +7503,7 @@ function App() {
     flushingRef.current = true;
     setSyncStatus("syncing");
     let result = "error";
+    const code = teamCodeRef.current;
     try {
       const snapshot = dataRef.current;
       const { data: row, error } = await supabaseRef.current
@@ -7307,6 +7512,10 @@ function App() {
         .eq("team_code", teamCodeRef.current)
         .maybeSingle();
       if (error) throw error;
+      if (teamCodeRef.current !== code) {
+        result = "stale";
+        return;
+      }
       const remoteUpdatedAt = row ? new Date(row.updated_at).getTime() : 0;
       let toUpload = snapshot;
       if (row && row.data && remoteUpdatedAt > getLastRemoteUpdatedAt()) {
@@ -7347,7 +7556,7 @@ function App() {
         flushAgainRef.current = false;
         scheduleRetry();
       } else {
-        flushAgainRef.current = false; // "blocked": espera a que el usuario revise
+        flushAgainRef.current = false; // "blocked" (espera a que el usuario revise) o "stale" (cambió de equipo)
       }
     }
   }
@@ -7382,13 +7591,15 @@ function App() {
       return;
     }
     setSyncStatus("syncing");
+    const code = teamCodeRef.current;
     try {
       const { data: row, error } = await supabaseRef.current
         .from(TABLE)
         .select("data, updated_at")
-        .eq("team_code", teamCodeRef.current)
+        .eq("team_code", code)
         .maybeSingle();
       if (error) throw error;
+      if (teamCodeRef.current !== code) return; // cambió de equipo mientras se descargaba
       if (row && row.data) {
         const remoteUpdatedAt = new Date(row.updated_at).getTime();
         if (remoteUpdatedAt > dataRef.current.updatedAt) {
@@ -7409,12 +7620,52 @@ function App() {
     }
   }
 
+  // Cambiar de código de equipo cambia de "cajón": se cargan los datos locales de ese equipo
+  // (vacíos si es la primera vez en este dispositivo) y nunca se llevan los del equipo anterior.
+  // Solo al poner código por primera vez (desde el modo solo local) se conservan los datos
+  // que hubiera, porque son del propio usuario y es la forma de subirlos a su equipo.
   function saveTeamCode(code) {
+    const prevCode = teamCodeRef.current;
+    if (code === prevCode) return;
+    if (prevCode && pendingRef.current.length > 0) {
+      const n = pendingRef.current.length;
+      if (
+        !window.confirm(
+          `Hay ${n} cambio${n === 1 ? "" : "s"} del equipo "${prevCode}" sin subir todavía. ` +
+            `Se quedan guardados en este dispositivo y se subirán cuando vuelvas a entrar con ese código. ¿Cambiar de equipo?`
+        )
+      )
+        return;
+    }
+    // Para lo que estuviera en marcha del equipo anterior
+    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    pushTimerRef.current = null;
+    retryTimerRef.current = null;
+    retryAttemptRef.current = 0;
+
+    const carryOver = !prevCode && code && localStorage.getItem(teamKey(DATA_KEY, code)) == null;
+    const current = dataRef.current;
     setStoredTeamCode(code);
-    setTeamCodeState(code);
+    setActiveTeamCode(code);
     teamCodeRef.current = code;
+    let next;
+    if (carryOver) {
+      next = current;
+      saveLocalData(next);
+      try { localStorage.removeItem(teamKey(DATA_KEY, "")); } catch (e) { /* no crítico */ }
+    } else {
+      next = loadLocalData();
+    }
+    setData(next);
+    dataRef.current = next;
+    setPending(loadPending());
+    setMatch(null);
+    matchRef.current = null;
+    setView("home");
+    setTeamCodeState(code);
     setSyncStatus(computeStatus());
-    if (code) pullFromSupabase();
+    // La descarga de la nube la hace el efecto de tiempo real al cambiar `teamCode`
   }
 
   function saveSupabaseConfig(url, key) {
@@ -7578,6 +7829,7 @@ function App() {
         (payload) => {
           const row = payload.new;
           if (!row || row.device_id === deviceId) return;
+          if (row.team_code !== teamCodeRef.current) return; // nunca datos de otro equipo
           const remoteUpdatedAt = new Date(row.updated_at).getTime();
           if (pendingRef.current.length > 0) {
             flushQueue(); // fusiona lo del otro dispositivo con lo pendiente de este
@@ -7588,8 +7840,17 @@ function App() {
       )
       .subscribe();
 
+    // Respaldo del tiempo real: con el aislamiento por equipo aplicado en Supabase
+    // (supabase/aislamiento_por_equipo.sql) el canal deja de recibir avisos, así que se
+    // comprueba la nube cada 30 s mientras la app está a la vista.
+    const poll = setInterval(() => {
+      if (!document.hidden && navigator.onLine) pullFromSupabase();
+    }, 30000);
+
+    const client = supabaseRef.current;
     return () => {
-      supabaseRef.current.removeChannel(channel);
+      clearInterval(poll);
+      client.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamCode, configured, supabaseConfig.url, supabaseConfig.key]);
@@ -7648,6 +7909,11 @@ function App() {
     commit({ ...dataRef.current, squad: updatedSquad });
   }
 
+  // Perfil del equipo (nombre, FFCV, duración por defecto): viaja con el resto de datos
+  function saveTeamProfile(profile) {
+    commit({ ...dataRef.current, team: { ...normalizeTeamProfile(dataRef.current.team), ...profile } });
+  }
+
   // Pesos de la nota de este equipo: viajan con el resto de datos a Supabase
   function saveRatingConfig(config) {
     commit({ ...dataRef.current, ratingConfig: normalizeRatingConfig(config) }, { syncNow: true });
@@ -7695,15 +7961,20 @@ function App() {
   // Descarga de la FFCV los escudos de todos los equipos del grupo (el nuestro incluido).
   // Solo rellena los que aún no tienen escudo: los que hayas elegido a mano no se tocan.
   async function importFfcvCrests() {
+    const profile = normalizeTeamProfile(dataRef.current.team);
+    if (!profile.ffcvGroupCode) {
+      setCrestImport({ loading: false, message: "Primero configura el grupo de la FFCV en Ajustes → Mi equipo." });
+      return;
+    }
     setCrestImport({ loading: true, message: null });
     try {
-      const r = await fetch("/api/clasificacion");
+      const r = await fetch(`/api/clasificacion?cod_grupo=${encodeURIComponent(profile.ffcvGroupCode)}`);
       const body = await r.json();
       if (!r.ok) throw new Error(body.error || "No se pudo consultar la FFCV");
       const teams = (body.clasificacion || []).filter((t) => t.escudo);
       const base = dataRef.current.crests || emptyCrests();
       const missing = teams.filter((t) =>
-        t.codequipo === LEAGUE_TEAM_CODE ? !base.own : !base.rivals[crestKey(t.nombre)]
+        t.codequipo === profile.ffcvTeamCode ? !base.own : !base.rivals[crestKey(t.nombre)]
       );
       const results = await Promise.all(
         missing.map(async (t) => {
@@ -7726,7 +7997,7 @@ function App() {
           failed++;
           return;
         }
-        if (team.codequipo === LEAGUE_TEAM_CODE) own = url;
+        if (team.codequipo === profile.ffcvTeamCode) own = url;
         else rivals[crestKey(team.nombre)] = url;
         added++;
       });
@@ -7836,7 +8107,12 @@ function App() {
 
   function importFfcvCalendar() {
     setCalendarImport({ loading: true, message: null });
-    fetch("/api/calendario")
+    const profile = normalizeTeamProfile(dataRef.current.team);
+    if (!profile.ffcvGroupCode || !profile.ffcvTeamCode) {
+      setCalendarImport({ loading: false, message: "Primero elige tu grupo y tu equipo de la FFCV en Ajustes → Mi equipo." });
+      return;
+    }
+    fetch(`/api/calendario?cod_grupo=${encodeURIComponent(profile.ffcvGroupCode)}&cod_equipo=${encodeURIComponent(profile.ffcvTeamCode)}`)
       .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
       .then(({ ok, body }) => {
         if (!ok || body.error) throw new Error(body.error || "No se pudo obtener el calendario");
@@ -7856,7 +8132,7 @@ function App() {
           id: genId(),
           opponent: f.opponent,
           date: f.date,
-          halfLength: 40,
+          halfLength: profile.defaultHalfLength,
           half: 1,
           finished: false,
           scheduled: true,
@@ -7971,6 +8247,7 @@ function App() {
 
   const isTabView = TAB_VIEWS.includes(view);
   const ratingConfig = normalizeRatingConfig(data.ratingConfig);
+  const team = normalizeTeamProfile(data.team);
   const nextScheduledMatch =
     data.matchesList
       .filter((m) => m.scheduled)
@@ -7985,6 +8262,7 @@ function App() {
       <div style={isTabView ? { paddingBottom: 64 } : undefined}>
         {view === "home" && (
           <Home
+            teamName={team.name}
             crests={data.crests}
             onSaveCrest={saveCrest}
             syncStatus={syncView}
@@ -7997,6 +8275,7 @@ function App() {
         )}
         {view === "partidos" && (
           <MatchesTab
+            team={team}
             matches={data.matchesList}
             crests={data.crests}
             onOpenMatch={openMatch}
@@ -8045,11 +8324,16 @@ function App() {
             onImportJSON={importJSON}
             ratingConfig={ratingConfig}
             onSaveRatingConfig={saveRatingConfig}
+            team={team}
+            crests={data.crests}
+            onSaveTeam={saveTeamProfile}
+            onSaveCrest={saveCrest}
             onBack={goHome}
           />
         )}
         {view === "setup" && (
           <MatchSetup
+            defaultHalfLength={team.defaultHalfLength}
             squad={data.squad}
             crests={data.crests}
             onSaveCrest={saveCrest}
@@ -8083,7 +8367,7 @@ function App() {
           />
         )}
         {view === "summary" && match && (
-          <MatchSummary match={match} squad={data.squad} crests={data.crests} onBack={goHome} onExport={exportCSV} onUpdate={updateMatch} />
+          <MatchSummary match={match} squad={data.squad} crests={data.crests} teamName={team.name} onBack={goHome} onExport={exportCSV} onUpdate={updateMatch} />
         )}
         {view === "season" && (
           <SeasonStats
@@ -8118,6 +8402,10 @@ function App() {
     </RatingConfigContext.Provider>
   );
 }
+
+// Antes de arrancar: fija el equipo activo y mueve los datos antiguos (sin código) a sus claves
+setActiveTeamCode(getStoredTeamCode());
+migrateUnscopedStorage(getStoredTeamCode(), [DATA_KEY, PENDING_KEY, LAST_REMOTE_KEY, LEAGUE_CACHE_KEY, PITCH_BOARD_KEY]);
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
