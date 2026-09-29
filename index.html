@@ -1383,9 +1383,9 @@ function helpFaqSections(isOwner) {
           q: "¿Cómo recupero mi contraseña si la olvido?",
           a: [
             "En Ajustes → Cuenta (sin la sesión iniciada; si la tienes iniciada, antes pulsa «Cerrar sesión»), escribe tu email y pulsa «¿Olvidaste la contraseña? (escribe tu email arriba)» una sola vez.",
-            "Te llegará un email en inglés titulado «Reset Your Password» (mira también en Spam). Toca el enlace con un toque normal: en iPad o iPhone no lo mantengas pulsado, porque la vista previa lo gasta. Solo vale el último email que hayas pedido, y una sola vez.",
-            "El enlace abre la app en el navegador con la pantalla «Nueva contraseña»: escríbela dos veces y pulsa «Guardar contraseña». Después entra con la nueva contraseña en la app, también desde el icono de la pantalla de inicio.",
-            "Si sale «El enlace no ha funcionado», pide otro email y usa ese.",
+            "Te llegará un email con un código (mira también en Spam). En la misma pantalla aparece un recuadro: escribe ese código y tu nueva contraseña dos veces, y pulsa «Cambiar contraseña». Entrarás directamente con tu cuenta.",
+            "Solo vale el código del último email que hayas pedido, y caduca al cabo de un rato: si no funciona, pide otro. Si el email te llegó antes de volver a la app, usa «Ya tengo un código».",
+            "El email también trae un enlace que hace lo mismo desde el navegador; si lo usas en iPad o iPhone, tócalo sin mantenerlo pulsado, porque la vista previa lo gasta.",
           ],
         },
         {
@@ -1553,6 +1553,11 @@ function AccountCard({ authUser, configured, onSignIn, onSignUp, onSignOut, onRe
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  // Recuperar contraseña con el código del email
+  const [showCode, setShowCode] = useState(false);
+  const [code, setCode] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [newPwd2, setNewPwd2] = useState("");
   const labelStyle = { color: "var(--chalk-dim)" };
 
   async function run(fn) {
@@ -1563,15 +1568,31 @@ function AccountCard({ authUser, configured, onSignIn, onSignUp, onSignOut, onRe
       if (res.error) setMsg({ error: true, text: res.error });
       else if (res.info) setMsg({ error: false, text: res.info });
       if (res.ok) setPassword("");
+      if (res.codeSent) setShowCode(true);
+      if (res.ok && showCode) {
+        setShowCode(false);
+        setCode("");
+        setNewPwd("");
+        setNewPwd2("");
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  function submitCode() {
+    const cleanCode = code.replace(/\s+/g, "");
+    if (!/^\d{6,10}$/.test(cleanCode)) return setMsg({ error: true, text: "El código son las cifras que vienen en el email." });
+    if (newPwd.length < 6) return setMsg({ error: true, text: "La contraseña debe tener al menos 6 caracteres." });
+    if (newPwd !== newPwd2) return setMsg({ error: true, text: "Las dos contraseñas no coinciden." });
+    run(() => onResetPassword(email.trim(), cleanCode, newPwd));
   }
 
   if (authUser) {
     return (
       <div className="mp-card p-3 mb-4">
         <label className="text-xs" style={labelStyle}>Cuenta</label>
+        {msg && !msg.error && <div className="text-xs mt-1" style={{ color: "var(--turf)" }}>{msg.text}</div>}
         <div className="text-sm mt-1 mb-2">Sesión iniciada como <span className="font-semibold">{authUser.email}</span></div>
         <p className="text-xs mb-2" style={labelStyle}>
           Entra con esta misma cuenta en el iPad y en el ordenador para que compartan los datos.
@@ -1603,6 +1624,31 @@ function AccountCard({ authUser, configured, onSignIn, onSignUp, onSignOut, onRe
         className="text-xs mt-2 disabled:opacity-40" style={{ color: "var(--cielo)" }}>
         ¿Olvidaste la contraseña? (escribe tu email arriba)
       </button>
+      {!showCode && (
+        <button onClick={() => setShowCode(true)} className="text-xs mt-2 ml-3" style={{ color: "var(--chalk-dim)" }}>
+          Ya tengo un código
+        </button>
+      )}
+      {showCode && (
+        <div className="mp-card p-3 mt-3" style={{ borderColor: "var(--cielo)" }}>
+          <div className="text-sm font-semibold mb-1">Cambiar la contraseña con el código</div>
+          <p className="text-xs mb-2" style={labelStyle}>
+            Escribe el código del último email que te hemos enviado{email.trim() ? ` a ${email.trim()}` : " (y tu email arriba)"} y tu nueva contraseña.
+          </p>
+          <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code"
+            placeholder="Código del email" className="mp-input px-3 py-2 w-full mb-2 tracking-widest" />
+          <input value={newPwd} onChange={(e) => setNewPwd(e.target.value)} type="password" autoComplete="new-password"
+            placeholder="Nueva contraseña (mínimo 6 caracteres)" className="mp-input px-3 py-2 w-full mb-2" />
+          <input value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} type="password" autoComplete="new-password"
+            placeholder="Repite la contraseña" className="mp-input px-3 py-2 w-full"
+            onKeyDown={(e) => e.key === "Enter" && submitCode()} />
+          <button onClick={submitCode} disabled={busy || !configured || !code.trim() || !newPwd || !newPwd2 || !/.+@.+\..+/.test(email.trim())}
+            className="mp-btn mp-btn-primary w-full py-2.5 font-semibold mt-3 disabled:opacity-40">
+            {busy ? "Comprobando…" : "Cambiar contraseña"}
+          </button>
+          <button onClick={() => setShowCode(false)} className="text-xs mt-2" style={labelStyle}>Cancelar</button>
+        </div>
+      )}
       {msg && (
         <div className="text-xs mt-2" style={{ color: msg.error ? "var(--crimson)" : "var(--turf)" }}>{msg.text}</div>
       )}
@@ -8809,6 +8855,8 @@ function App() {
   const [changingTeam, setChangingTeam] = useState(false);
   // Enlace de "cambiar contraseña" abierto: pantalla propia para escribir la nueva
   const [recoveryOpen, setRecoveryOpen] = useState(false);
+  // Cambio de contraseña con código en curso: no abrir además la pantalla del enlace
+  const codeRecoveryRef = useRef(false);
   // Enlace de un email de Supabase que ha fallado (caducado, ya usado, otro navegador...)
   const [authLinkError, setAuthLinkError] = useState(() => authLinkErrorMessage());
   const [supabaseConfig, setSupabaseConfig] = useState(getStoredSupabaseConfig);
@@ -8887,7 +8935,7 @@ function App() {
     const { data: sub } = client.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT") handleAuthUser(null);
       else if (session && session.user) handleAuthUser(session.user);
-      if (event === "PASSWORD_RECOVERY") setRecoveryOpen(true);
+      if (event === "PASSWORD_RECOVERY" && !codeRecoveryRef.current) setRecoveryOpen(true);
     });
     return () => {
       cancelled = true;
@@ -9265,13 +9313,34 @@ function App() {
     handleAuthUser(null);
   }
 
-  async function resetPassword(email) {
-    if (!supabaseRef.current) return { error: "Primero guarda la conexión con Supabase." };
-    const { error } = await supabaseRef.current.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin,
-    });
-    if (error) return { error: authErrorMessage(error) };
-    return { info: "Te hemos enviado un email para cambiar la contraseña. Ábrelo en este dispositivo." };
+  // Recuperar contraseña. Sin `code`: envía el email (con un código de 6 cifras y, además, un
+  // enlace). Con `code`: lo comprueba y pone la contraseña nueva desde la propia app, sin
+  // depender del enlace (que en iPad se gasta con la vista previa y se abre en el navegador).
+  async function resetPassword(email, code, newPassword) {
+    const client = supabaseRef.current;
+    if (!client) return { error: "Primero guarda la conexión con Supabase." };
+    if (!code) {
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+      if (error) return { error: authErrorMessage(error) };
+      return { info: "Te hemos enviado un email con un código. Escríbelo abajo junto a tu nueva contraseña.", codeSent: true };
+    }
+    codeRecoveryRef.current = true;
+    try {
+      const { data: res, error } = await client.auth.verifyOtp({ email, token: String(code).trim(), type: "recovery" });
+      if (error) {
+        return {
+          error: /expired|invalid/i.test(error.message || "")
+            ? "El código no es válido o ha caducado. Usa el del último email que pediste, o pide otro."
+            : authErrorMessage(error),
+        };
+      }
+      const { error: pwdError } = await client.auth.updateUser({ password: newPassword });
+      if (res && res.user) handleAuthUser(res.user);
+      if (pwdError) return { error: `Has entrado en tu cuenta, pero no se pudo cambiar la contraseña: ${authErrorMessage(pwdError)}` };
+      return { ok: true, info: "Contraseña cambiada. Ya has entrado con tu cuenta." };
+    } finally {
+      codeRecoveryRef.current = false;
+    }
   }
 
   async function saveNewPassword(pwd) {
