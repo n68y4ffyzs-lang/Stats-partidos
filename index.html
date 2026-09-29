@@ -1052,6 +1052,7 @@ function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
       name: name.trim(),
       defaultHalfLength: Math.min(Math.max(Number(halfLength) || 45, 10), 60),
       defaultFormation: formation,
+      ...(formation !== team.defaultFormation ? { formationChosen: true } : {}),
       ffcvGroupCode: groupCode.trim(),
       ffcvTeamCode: teamCode.trim(),
     });
@@ -3064,7 +3065,7 @@ function cleanUncalled(desconvocados) {
   return out;
 }
 
-function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, defaultHalfLength = 45 }) {
+function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, defaultHalfLength = 45, teamFormation, formationChosen, onChooseFormation }) {
   const [opponent, setOpponent] = useState("");
   const [date, setDate] = useState(todayISO());
   const [halfLength, setHalfLength] = useState(defaultHalfLength);
@@ -3181,6 +3182,10 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, d
         </div>
       )}
 
+      {onChooseFormation && (
+        <TeamFormationPicker formation={teamFormation} chosen={formationChosen} onChoose={onChooseFormation} />
+      )}
+
       <LineupPicker
         squad={squad}
         titulares={titulares}
@@ -3202,9 +3207,73 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, d
 }
 
 /* ---------------------------------------------------------
+   Formación habitual del equipo al elegir el once inicial. La primera vez (el equipo aún no
+   la ha elegido: team.formationChosen) se pide con un recuadro visible; después solo se
+   muestra con un "Cambiar". Se guarda como formación por defecto del equipo (team.defaultFormation),
+   la que usa "Colocar automáticamente" en la Pizarra de cada partido.
+--------------------------------------------------------- */
+function TeamFormationPicker({ formation, chosen, onChoose }) {
+  const [open, setOpen] = useState(false);
+  const dim = { color: "var(--chalk-dim)" };
+  const chips = (
+    <div className="flex flex-wrap gap-2">
+      {RIVAL_FORMATIONS.map((f) => (
+        <button
+          key={f.id}
+          onClick={() => {
+            onChoose(f.id);
+            setOpen(false);
+          }}
+          className="mp-btn px-3 py-1.5 text-sm"
+          style={chosen && formation === f.id ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+        >
+          {f.id}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (!chosen) {
+    return (
+      <div className="mp-card p-3 mb-4" style={{ borderColor: "var(--turf)" }}>
+        <div className="text-sm font-semibold mb-1">¿Con qué formación jugáis normalmente?</div>
+        <div className="text-xs mb-3" style={dim}>
+          Se guarda como la formación de tu equipo y "Colocar automáticamente" la usará en cada
+          partido. Si un día cambiáis de sistema, se puede cambiar solo para ese partido desde la Pizarra.
+        </div>
+        {chips}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between text-sm">
+        <span>
+          <span style={dim}>Formación habitual: </span>
+          <span className="font-semibold">{formation}</span>
+        </span>
+        <button onClick={() => setOpen((v) => !v)} className="text-xs" style={{ color: "var(--cielo)" }}>
+          {open ? "Cerrar" : "Cambiar"}
+        </button>
+      </div>
+      {open && (
+        <div className="mp-card p-3 mt-2">
+          <div className="text-xs mb-2" style={dim}>
+            Cambia la formación habitual del equipo (para todos los partidos). Para un solo partido,
+            cámbiala desde su Pizarra.
+          </div>
+          {chips}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    Pantalla: Partido programado (aún no empezado)
 --------------------------------------------------------- */
-function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, onBack }) {
+function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, onBack, teamFormation, formationChosen, onChooseFormation }) {
   const [titulares, setTitulares] = useState(match.onPitch || []);
   const [desconvocados, setDesconvocados] = useState(match.desconvocados || {});
 
@@ -3248,13 +3317,18 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
           Primero necesitas añadir jugadores a la plantilla.
         </div>
       ) : (
-        <LineupPicker
-          squad={squad}
-          titulares={titulares}
-          setTitulares={setTitulares}
-          desconvocados={desconvocados}
-          setDesconvocados={setDesconvocados}
-        />
+        <React.Fragment>
+          {onChooseFormation && (
+            <TeamFormationPicker formation={teamFormation} chosen={formationChosen} onChoose={onChooseFormation} />
+          )}
+          <LineupPicker
+            squad={squad}
+            titulares={titulares}
+            setTitulares={setTitulares}
+            desconvocados={desconvocados}
+            setDesconvocados={setDesconvocados}
+          />
+        </React.Fragment>
       )}
 
       <button
@@ -9519,6 +9593,9 @@ function App() {
         {view === "setup" && (
           <MatchSetup
             defaultHalfLength={team.defaultHalfLength}
+            teamFormation={team.defaultFormation}
+            formationChosen={!!team.formationChosen}
+            onChooseFormation={(id) => saveTeamProfile({ defaultFormation: id, formationChosen: true })}
             squad={data.squad}
             crests={data.crests}
             onSaveCrest={saveCrest}
@@ -9536,6 +9613,9 @@ function App() {
             onStart={beginScheduledMatch}
             onDelete={() => deleteMatch(match.id, match.opponent)}
             onBack={goHome}
+            teamFormation={team.defaultFormation}
+            formationChosen={!!team.formationChosen}
+            onChooseFormation={(id) => saveTeamProfile({ defaultFormation: id, formationChosen: true })}
           />
         )}
         {view === "live" && match && (
