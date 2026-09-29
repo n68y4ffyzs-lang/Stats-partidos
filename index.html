@@ -3877,6 +3877,41 @@ const FORMATION_1_3_5_2 = [
   { code: "DC", x: 62, y: 12 },
 ];
 
+// Formaciones habituales del rival: jugadores por línea, de la defensa al ataque (más el portero).
+// Solo son una referencia táctica: círculos rojos sin nombre en la mitad derecha del campo.
+const RIVAL_FORMATIONS = [
+  { id: "1-4-4-2", lines: [4, 4, 2] },
+  { id: "1-4-3-3", lines: [4, 3, 3] },
+  { id: "1-4-2-3-1", lines: [4, 2, 3, 1] },
+  { id: "1-4-1-4-1", lines: [4, 1, 4, 1] },
+  { id: "1-4-5-1", lines: [4, 5, 1] },
+  { id: "1-4-4-1-1", lines: [4, 4, 1, 1] },
+  { id: "1-3-5-2", lines: [3, 5, 2] },
+  { id: "1-3-4-3", lines: [3, 4, 3] },
+  { id: "1-5-3-2", lines: [5, 3, 2] },
+  { id: "1-5-4-1", lines: [5, 4, 1] },
+];
+
+// Posiciones en pantalla (en % del campo horizontal: left 0 = nuestra portería, 100 = la suya)
+// de los 11 del rival: portero junto a su portería y las líneas repartidas hasta el medio campo,
+// en espejo respecto a los nuestros porque atacan hacia la izquierda.
+function rivalFormationSpots(formationId) {
+  const f = RIVAL_FORMATIONS.find((x) => x.id === formationId);
+  if (!f) return [];
+  const spots = [{ left: 95, top: 50 }];
+  const back = 84;
+  const front = 57;
+  f.lines.forEach((n, li) => {
+    const left = f.lines.length === 1 ? back : back - (li * (back - front)) / (f.lines.length - 1);
+    // Cuanto menos jugadores en la línea, más juntos hacia el centro (2 puntas no van pegados a la banda)
+    const span = n <= 1 ? 0 : Math.min(76, (n - 1) * 24);
+    for (let i = 0; i < n; i++) {
+      spots.push({ left, top: n === 1 ? 50 : 50 - span / 2 + (i * span) / (n - 1) });
+    }
+  });
+  return spots;
+}
+
 // Código de posición del hueco de formación más cercano a unas coordenadas del campo:
 // se usa para inferir "qué posición pasa a jugar" un jugador cuando se le coloca a mano.
 function nearestPositionCode(x, y) {
@@ -4128,16 +4163,40 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
     setSelectedId(null);
   }
 
+  const rivalSpots = rivalFormationSpots(match.rivalFormation);
+
+  function setRivalFormation(id) {
+    onUpdate({ ...match, rivalFormation: id || null }, true);
+  }
+
   return (
     <div className="mb-4">
-      {rosterOnPitch.length > 0 && (
-        <button
-          onClick={autoPlaceFormation}
-          className="mp-btn mp-btn-outline w-full py-2 text-sm mb-2"
-        >
-          Colocar automáticamente (1-3-5-2)
-        </button>
-      )}
+      <div className="flex flex-wrap gap-2 mb-2">
+        {rosterOnPitch.length > 0 && (
+          <button
+            onClick={autoPlaceFormation}
+            className="mp-btn mp-btn-outline flex-1 py-2 text-sm"
+            style={{ minWidth: 200 }}
+          >
+            Colocar automáticamente (1-3-5-2)
+          </button>
+        )}
+        <label className="mp-btn mp-btn-outline flex-1 flex items-center justify-center gap-2 py-1 text-sm" style={{ minWidth: 200 }}>
+          <span className="mp-dot" style={{ background: "#E53935" }} />
+          <span style={{ color: "var(--chalk-dim)" }}>Rival:</span>
+          <select
+            value={match.rivalFormation || ""}
+            onChange={(e) => setRivalFormation(e.target.value)}
+            className="bg-transparent text-sm font-semibold py-1"
+            style={{ color: "var(--chalk)", outline: "none" }}
+          >
+            <option value="" style={{ color: "#111" }}>Sin formación</option>
+            {RIVAL_FORMATIONS.map((f) => (
+              <option key={f.id} value={f.id} style={{ color: "#111" }}>{f.id}</option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
         {selectedId
@@ -4220,6 +4279,27 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
             }}
           />
         )}
+
+        {/* Formación del rival: círculos rojos sin nombre, fijos y "transparentes" al toque, para
+            que no se mezclen con la selección de los nuestros ni con los cambios */}
+        {rivalSpots.map((spot, i) => (
+          <div
+            key={`rival-${i}`}
+            style={{
+              position: "absolute",
+              left: `${spot.left}%`,
+              top: `${spot.top}%`,
+              width: 26,
+              height: 26,
+              transform: "translate(-50%, -50%)",
+              borderRadius: "50%",
+              background: "#E53935",
+              border: "2px solid rgba(255,255,255,0.85)",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
+              pointerEvents: "none",
+            }}
+          />
+        ))}
 
         {placedIds.map((id) => {
           const p = playerById(id);
