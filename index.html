@@ -1564,6 +1564,7 @@ function SyncSettings({
           onSignOut={onSignOut}
           onResetPassword={onResetPassword}
         />
+        {team && onSaveTeam && <TeamFormationCard team={team} onSave={onSaveTeam} />}
         <RatingSettings config={ratingConfig} onSave={onSaveRatingConfig} />
       </div>
     );
@@ -3264,6 +3265,40 @@ function TeamFormationPicker({ formation, chosen, onChoose }) {
             cámbiala desde su Pizarra.
           </div>
           {chips}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Ajustes de las cuentas client → Formación habitual del equipo (la de "Colocar automáticamente")
+function TeamFormationCard({ team, onSave }) {
+  const dim = { color: "var(--chalk-dim)" };
+  return (
+    <div className="mp-card p-3 mb-4">
+      <label className="text-xs" style={dim}>Formación habitual</label>
+      <p className="text-xs mt-1 mb-2" style={dim}>
+        La que usa "Colocar automáticamente" en la Pizarra de cada partido. Para un solo partido,
+        cámbiala desde su Pizarra.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {RIVAL_FORMATIONS.map((f) => {
+          const active = team.formationChosen && team.defaultFormation === f.id;
+          return (
+            <button
+              key={f.id}
+              onClick={() => onSave({ defaultFormation: f.id, formationChosen: true })}
+              className="mp-btn px-3 py-1.5 text-sm"
+              style={active ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+            >
+              {f.id}
+            </button>
+          );
+        })}
+      </div>
+      {!team.formationChosen && (
+        <div className="text-xs mt-2" style={{ color: "var(--amber)" }}>
+          Aún no has elegido la formación de tu equipo (ahora se usa {team.defaultFormation}).
         </div>
       )}
     </div>
