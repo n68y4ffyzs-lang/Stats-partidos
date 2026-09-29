@@ -1231,6 +1231,213 @@ function TeamSetup({ onChoose, onSkip, mode = "first", currentName, confirmChoic
   );
 }
 
+/* ---------------------------------------------------------
+   Ajustes → Ayuda: preguntas frecuentes en acordeón. Las respuestas describen lo que hace la
+   app de verdad; si cambia una función, hay que actualizar aquí su respuesta. Algunas
+   respuestas dependen del tipo de cuenta (owner / client), porque sus Ajustes son distintos.
+--------------------------------------------------------- */
+function helpFaqSections(isOwner) {
+  return [
+    {
+      title: "Primeros pasos",
+      items: [
+        {
+          q: "¿Cómo creo la plantilla de mi equipo?",
+          a: [
+            "Entra en la pestaña Plantilla (barra de abajo). Escribe el dorsal y el nombre del jugador, elige su posición en el desplegable (o déjalo en «Sin posición») y pulsa «Añadir».",
+            "Para corregir a un jugador pulsa «Editar» en su fila y luego «Guardar». «Quitar» lo elimina de la plantilla al momento, sin pedir confirmación.",
+          ],
+        },
+        {
+          q: "¿Cómo cambio mi equipo si me equivoqué al buscarlo?",
+          a: isOwner
+            ? [
+                "En Ajustes → Mi equipo: escribe el código de grupo de la FFCV, pulsa «Buscar equipos», elige tu equipo en la lista y pulsa «Guardar mi equipo».",
+              ]
+            : [
+                "En Ajustes → Mi equipo pulsa «Cambiar de equipo». Se abre el mismo buscador de la FFCV: escribe el nombre de tu club y elige el equipo correcto.",
+                "Antes de aplicar el cambio te pide confirmación. Cambian la clasificación, el calendario, el escudo y los rivales, y se quitan los partidos programados sin jugar que vinieron del calendario del equipo anterior. Tu plantilla, los partidos jugados, las estadísticas y las puntuaciones no se tocan.",
+              ],
+        },
+        {
+          q: "¿Puedo cambiar el escudo o el nombre de mi equipo más adelante?",
+          a: isOwner
+            ? [
+                "Escudo: toca el escudo de tu equipo arriba a la izquierda en Inicio (o en Ajustes → Mi equipo) y elige una imagen.",
+                "Nombre: en Ajustes → Mi equipo, cambia «Nombre del club» y pulsa «Guardar mi equipo».",
+              ]
+            : [
+                "Escudo: sí. Toca el escudo de tu equipo arriba a la izquierda en Inicio y elige una imagen.",
+                "Nombre: es el de tu equipo en la FFCV y no se puede escribir a mano. Solo cambia si cambias de equipo (Ajustes → Mi equipo → «Cambiar de equipo»).",
+              ],
+        },
+      ],
+    },
+    {
+      title: "Antes de un partido",
+      items: [
+        {
+          q: "¿Cómo pongo la alineación y el once inicial?",
+          a: [
+            "En Inicio pulsa «Nuevo partido»: escribe el rival, la fecha, la duración de cada parte y si jugáis de local o visitante.",
+            "Con «Marcar once inicial» activado, toca a los titulares (se ponen en verde); el resto de convocados quedan como suplentes. Después pulsa «Empezar partido».",
+            "Si la fecha es futura, el botón pasa a ser «Programar partido» y el once es opcional: el día del partido ábrelo desde Partidos, elige el once y pulsa «Empezar partido».",
+            "La primera vez que eliges un once, la app te pregunta con qué formación jugáis normalmente.",
+          ],
+        },
+        {
+          q: "¿Qué son los \"desconvocados\" y cómo los marco?",
+          a: [
+            "Son jugadores de tu plantilla que no van convocados a ese partido: no aparecen como suplentes y no cuentan para cambios ni estadísticas de ese partido.",
+            "Al hacer la alineación pulsa «Marcar desconvocados» y toca a esos jugadores (se ponen en rojo). Puedes indicar un motivo (lesión, sanción, decisión técnica, motivos personales, enfermedad u otro), que es opcional.",
+            "Con el partido ya empezado, en la pestaña «Jugadores y equipo» abre «Convocatoria» para desconvocar a un suplente que aún no haya jugado o volver a convocar a un desconvocado.",
+          ],
+        },
+        {
+          q: "¿Cómo asigno la posición de cada jugador (PT, DFC, MC...)?",
+          a: [
+            "En Plantilla pulsa «Editar» en el jugador, elige la posición en el desplegable (PT portero, DFI/DFC/DFD defensas, CAI/CAD carrileros, MC mediocentro, MCO mediocentro ofensivo, DC delantero) y pulsa «Guardar».",
+            "La posición se usa para colocarle automáticamente en la Pizarra y para su puntuación, porque cada acción vale distinto según la posición. Si en un partido le mueves a otra zona en la Pizarra, la nota usa la posición que ocupaba en cada momento.",
+          ],
+        },
+        {
+          q: "¿Cómo cambio la formación de mi equipo o la del rival?",
+          a: [
+            isOwner
+              ? "Formación habitual de tu equipo: la eliges la primera vez que haces un once, y después se cambia en Ajustes → Mi equipo → «Formación por defecto». Es la que usa «Colocar automáticamente»."
+              : "Formación habitual de tu equipo: la eliges la primera vez que haces un once, y después se cambia en Ajustes → Formación habitual. Es la que usa «Colocar automáticamente».",
+            "Solo para un partido: en la pestaña Pizarra del partido, elige otra en el selector «Nosotros». No cambia la formación habitual.",
+            "Rival: en la misma Pizarra, elige su formación en el selector «Rival». Aparecen círculos rojos en su mitad, que puedes arrastrar.",
+          ],
+        },
+      ],
+    },
+    {
+      title: "Durante el partido",
+      items: [
+        {
+          q: "¿Cómo registro un gol, una tarjeta o un cambio?",
+          a: [
+            "En la pestaña «Jugadores y equipo», toca al jugador en la lista «En el campo» y pulsa el botón del evento. El minuto se toma del cronómetro.",
+            "Al pulsar «Gol» te pregunta cómo fue (de jugada, de córner, de falta o de penalti). En las tarjetas te pregunta el motivo (falta, protestar o último hombre).",
+            "Cambio: pulsa «Cambiar» junto al jugador que sale y elige al que entra. También se puede en la Pizarra: toca un suplente y luego al jugador que sale.",
+          ],
+        },
+        {
+          q: "¿Puedo usar la app sin conexión a internet durante el partido?",
+          a: [
+            "Sí. Todo (alineación, eventos, cambios, cronómetro, Pizarra, PDF) se guarda en el dispositivo y se sube solo a la nube cuando vuelve la conexión, sin que tengas que hacer nada.",
+            "El indicador de arriba te dice el estado: «Sin conexión — guardando en local», «X cambios pendientes de subir» o «Sincronizado».",
+            "Para que funcione, abre la app con internet antes del partido en ese dispositivo (con la sesión iniciada) y, en iPad o iPhone, úsala siempre desde el icono de la pantalla de inicio. Entrar en la cuenta o crearla sí necesita internet.",
+          ],
+        },
+        {
+          q: "¿Qué pasa si me equivoco al registrar un evento, puedo corregirlo?",
+          a: [
+            "Sí. Durante el partido, en la pestaña «Jugadores y equipo» pulsa «Ver cronología» y toca «Deshacer» en el evento equivocado; después regístralo bien. Los eventos de equipo (córners, ataques por banda) tienen su propio «Deshacer» debajo de cada contador.",
+            "Un cambio también se puede deshacer desde la cronología: el que entró vuelve al banquillo y el que salió vuelve al campo. Si alguno de los dos participó después en otro cambio, primero hay que deshacer ese.",
+            "Con el partido ya finalizado, en su resumen (pestaña Resumen) tienes «Corregir eventos registrados» para quitar cualquier evento, «Añadir acciones olvidadas» para añadir lo que faltó y «Corregir minutos de los cambios».",
+          ],
+        },
+        {
+          q: "¿Cómo uso la Pizarra para colocar jugadores o preparar un córner/falta?",
+          a: [
+            "En un partido, pestaña «Pizarra»: «Colocar automáticamente» pone a tus titulares en tu mitad según la formación. Después arrastra a cualquier jugador (tuyo o rival) a donde quieras; los de «Sin colocar» se arrastran hasta el campo. Con «Lápiz» y «Goma» puedes dibujar.",
+            "Balón parado: las jugadas se diseñan en Stats → Balón parado → Posiciones (arrastrando los círculos y el balón). En el partido, debajo de la Pizarra, en «Balón parado» eliges el tipo (córner, falta o saque de banda), la jugada, y tocas cada círculo para asignarle un jugador.",
+            "En Stats → Pizarra tienes además una pizarra libre con toda la plantilla y rivales numerados.",
+          ],
+        },
+      ],
+    },
+    {
+      title: "Después del partido",
+      items: [
+        {
+          q: "¿Cómo veo o exporto las estadísticas del partido (PDF/Excel)?",
+          a: [
+            "Al pulsar «Finalizar partido» se abre su resumen (después, desde Partidos, tocando el partido). Tiene las pestañas Resumen, Estadísticas, Gráficos y Notas.",
+            "En la pestaña Resumen: «Descargar CSV del partido» genera un archivo CSV con todos los eventos, que se abre con Excel o Numbers. En el recuadro «Informe PDF con estadísticas y nota» puedes sacar el «PDF de todo el equipo» o uno por jugador; en iPad se abre el menú de compartir para mandarlo.",
+          ],
+        },
+        {
+          q: "¿Cómo se calcula la puntuación de cada jugador?",
+          a: [
+            "Cada jugador que ha jugado empieza con la nota base (6,0 si no la has cambiado) y cada acción suma o resta según la tabla de pesos y su posición: por ejemplo un gol, una asistencia o una parada suman, y una tarjeta o una falta restan.",
+            "Con el partido finalizado y si ganáis, todos suman un bono: +0,5 por ganar, +1 más si ganáis por 5 o más goles y +1 más si no encajáis ningún gol. La nota queda entre 0 y 10, con un decimal.",
+            "La posición que cuenta es la que ocupaba en la Pizarra en cada momento o, si no se le colocó, la de Plantilla. En Plantilla ves la nota media de la temporada de cada jugador.",
+          ],
+        },
+        {
+          q: "¿Puedo cambiar los valores de la puntuación (pesos de cada evento)?",
+          a: [
+            "Sí, en Ajustes → Puntuación de jugadores: puedes cambiar lo que vale cada acción en cada posición, la nota base y los bonos por resultado. Una casilla vacía significa que esa acción no cuenta para esa posición. Pulsa «Guardar cambios»; «Restaurar valores por defecto» vuelve a los de siempre.",
+            "Los cambios son de tu equipo y se aplican a todas las notas, también a las de partidos ya jugados.",
+          ],
+        },
+      ],
+    },
+    {
+      title: "Cuenta y datos",
+      items: [
+        {
+          q: "¿Mis datos están seguros si pierdo el móvil o el iPad?",
+          a: [
+            "Sí: tus datos se guardan en la nube asociados a tu cuenta y solo tu cuenta puede leerlos. Entrando con tu email y contraseña en otro dispositivo vuelves a tenerlos.",
+            "Lo único que se perdería son los cambios hechos en ese dispositivo que no llegaron a subirse (si estaba sin conexión). Si el dispositivo perdido estaba desbloqueado, quien lo tenga podría abrir la app con tu sesión iniciada.",
+            isOwner ? "Además, cada subida guarda una copia en Ajustes → Histórico de copias en la nube, desde donde se puede restaurar." : null,
+          ].filter(Boolean),
+        },
+        {
+          q: "¿Puedo usar la app en varios dispositivos a la vez?",
+          a: [
+            "Sí: entra con la misma cuenta en cada uno (por ejemplo iPad y ordenador) y verán los mismos datos; los cambios de uno llegan al otro en unos segundos.",
+            "Evita registrar el mismo partido en dos dispositivos a la vez: si los dos lo cambian al mismo tiempo, se queda la versión de ese partido del último que sube y los cambios del otro en ese partido se pierden. Distintos partidos o secciones sí se combinan sin problema.",
+          ],
+        },
+      ],
+    },
+  ];
+}
+
+function HelpFAQ({ isOwner }) {
+  const [openKey, setOpenKey] = useState(null);
+  const dim = { color: "var(--chalk-dim)" };
+  return (
+    <div className="mb-4">
+      <div className="text-xs uppercase tracking-wide mb-2 mt-2" style={dim}>Ayuda</div>
+      {helpFaqSections(isOwner).map((section) => (
+        <div key={section.title} className="mb-3">
+          <div className="text-sm font-semibold mb-1.5">{section.title}</div>
+          <div className="flex flex-col gap-1.5">
+            {section.items.map((item) => {
+              const key = `${section.title}|${item.q}`;
+              const open = openKey === key;
+              return (
+                <div key={key} className="mp-card overflow-hidden">
+                  <button
+                    onClick={() => setOpenKey(open ? null : key)}
+                    className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm"
+                  >
+                    <span>{item.q}</span>
+                    <span className="text-xs shrink-0" style={dim}>{open ? "▲" : "▼"}</span>
+                  </button>
+                  {open && (
+                    <div className="px-3 pb-3 flex flex-col gap-2 text-sm" style={{ color: "var(--chalk-dim)" }}>
+                      {item.a.map((p, i) => (
+                        <p key={i}>{p}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Ajustes → Cuenta: entrar, crear cuenta, recuperar contraseña y cerrar sesión
 function AccountCard({ authUser, configured, onSignIn, onSignUp, onSignOut, onResetPassword }) {
   const [email, setEmail] = useState("");
@@ -1554,6 +1761,7 @@ function SyncSettings({
         {!configured && (
           <SupabaseConnectionCard url={url} setUrl={setUrl} keyValue={key} setKey={setKey} onSaveConfig={onSaveConfig} />
         )}
+        <HelpFAQ isOwner={false} />
       </div>
     );
   }
@@ -1596,6 +1804,7 @@ function SyncSettings({
         )}
         {team && onSaveTeam && <TeamFormationCard team={team} onSave={onSaveTeam} />}
         <RatingSettings config={ratingConfig} onSave={onSaveRatingConfig} />
+        <HelpFAQ isOwner={false} />
       </div>
     );
   }
@@ -1757,6 +1966,7 @@ function SyncSettings({
       )}
 
       <RatingSettings config={ratingConfig} onSave={onSaveRatingConfig} />
+      <HelpFAQ isOwner={isOwner} />
     </div>
   );
 }
@@ -3597,8 +3807,55 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
     onUpdate({ ...match, events: match.events.filter((e) => e.id !== id) }, true);
   }
 
+  // Deshacer un cambio: además de borrar el apunte, el que entró vuelve al banquillo y el que
+  // salió vuelve al campo (con su sitio en la Pizarra). Solo se puede deshacer el último cambio
+  // en el que participa cada uno de los dos; si no, los minutos quedarían incoherentes.
   function removeSub(id) {
-    onUpdate({ ...match, subs: match.subs.filter((s) => s.id !== id) }, true);
+    const sub = match.subs.find((s) => s.id === id);
+    if (!sub) return;
+    const order = (s) => s.half * 1000 + s.minute;
+    const involved = (s) => [s.inId, s.outId].some((x) => x === sub.inId || x === sub.outId);
+    const idx = (s) => match.subs.indexOf(s);
+    const later = match.subs.find(
+      (s) => s.id !== id && involved(s) && (order(s) > order(sub) || (order(s) === order(sub) && idx(s) > idx(sub)))
+    );
+    if (later) {
+      window.alert(
+        `Primero deshaz el cambio del ${later.minute}' (sale ${later.outName}, entra ${later.inName}), en el que también participa uno de estos jugadores.`
+      );
+      return;
+    }
+    if (!match.onPitch.includes(sub.inId)) {
+      window.alert(`${sub.inName} ya no está en el campo, así que este cambio no se puede deshacer.`);
+      return;
+    }
+    const inEvents = match.events.filter(
+      (e) => e.playerId === sub.inId && (e.half > sub.half || (e.half === sub.half && e.minute >= sub.minute))
+    ).length;
+    const msg =
+      `¿Deshacer el cambio del ${sub.minute}'? ${sub.inName} vuelve al banquillo y ${sub.outName} vuelve al campo.` +
+      (inEvents
+        ? `\n\n${sub.inName} tiene ${inEvents} acción${inEvents === 1 ? "" : "es"} registrada${inEvents === 1 ? "" : "s"} después de entrar: se quedan apuntadas, pero ya no contará como que jugó.`
+        : "");
+    if (!window.confirm(msg)) return;
+    const positions = { ...(match.positions || {}) };
+    if (positions[sub.inId] && !positions[sub.outId]) positions[sub.outId] = positions[sub.inId];
+    delete positions[sub.inId];
+    onUpdate(
+      {
+        ...match,
+        subs: match.subs.filter((s) => s.id !== id),
+        onPitch: match.onPitch.map((x) => (x === sub.inId ? sub.outId : x)),
+        bench: match.bench.includes(sub.outId)
+          ? match.bench.map((x) => (x === sub.outId ? sub.inId : x))
+          : [...match.bench, sub.inId],
+        positions,
+        positionHistory: (match.positionHistory || []).filter(
+          (h) => !(h.playerId === sub.inId && h.half === sub.half && h.minute === sub.minute)
+        ),
+      },
+      true
+    );
   }
 
   function confirmSub(inId) {
@@ -5155,6 +5412,8 @@ function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpda
 
           <MatchPdfPanel match={match} squad={squad} crests={crests} teamName={teamName} />
 
+          {onUpdate && (match.events || []).length > 0 && <EditMatchEvents match={match} onUpdate={onUpdate} />}
+
           {onUpdate && <AddForgottenEvents match={match} squad={squad} onUpdate={onUpdate} />}
 
           {onUpdate && (match.subs || []).length > 0 && <EditSubMinutes match={match} onUpdate={onUpdate} />}
@@ -5913,6 +6172,50 @@ async function shareOrDownloadPdf(doc, filename) {
     }
   }
   doc.save(filename);
+}
+
+// Partido ya finalizado: quitar cualquier evento registrado por error (en directo o añadido
+// después). Estadísticas, notas y PDF se recalculan solos.
+function EditMatchEvents({ match, onUpdate }) {
+  const [open, setOpen] = useState(false);
+  const dim = { color: "var(--chalk-dim)" };
+  const events = [...(match.events || [])].sort((a, b) => a.half - b.half || a.minute - b.minute);
+
+  function remove(e) {
+    const label = `${e.minute}' · #${e.playerNumber} ${e.playerName} — ${EVENT_LABEL[e.type] || e.type}`;
+    if (!window.confirm(`¿Quitar este evento?\n\n${label}\n\nSe recalculan las estadísticas, las notas y el PDF.`)) return;
+    onUpdate({ ...match, events: match.events.filter((x) => x.id !== e.id) }, true);
+  }
+
+  return (
+    <div className="mp-card p-3 mb-5">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between text-left">
+        <span className="text-xs uppercase tracking-wide" style={dim}>
+          Corregir eventos registrados ({events.length})
+        </span>
+        <span className="text-xs" style={dim}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {events.map((e) => (
+            <div key={e.id} className={`mp-card ${eventChipCls(e.type)} px-2.5 py-2 flex items-center justify-between gap-2`}>
+              <span className="text-sm min-w-0">
+                <span style={dim}>{e.minute}' · </span>
+                #{e.playerNumber} {e.playerName} — {EVENT_LABEL[e.type] || e.type}
+                {eventDetailLabel(e) ? ` (${eventDetailLabel(e)})` : ""}
+              </span>
+              <button onClick={() => remove(e)} className="text-xs shrink-0" style={{ color: "var(--crimson)" }}>
+                Quitar
+              </button>
+            </div>
+          ))}
+          <div className="text-xs mt-1" style={dim}>
+            Para añadir una acción que falta, usa «Añadir acciones olvidadas».
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ¿Tienen sentido los cambios en su orden? Reconstruye el once inicial desde el `onPitch` final
