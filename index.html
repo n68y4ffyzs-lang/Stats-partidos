@@ -4616,6 +4616,8 @@ function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpda
 
           {onUpdate && <AddForgottenEvents match={match} squad={squad} onUpdate={onUpdate} />}
 
+          {onUpdate && (match.subs || []).length > 0 && <EditSubMinutes match={match} onUpdate={onUpdate} />}
+
           <UncalledList match={match} squad={squad} />
 
           {rows.length === 0 ? (
@@ -5370,6 +5372,123 @@ async function shareOrDownloadPdf(doc, filename) {
     }
   }
   doc.save(filename);
+}
+
+// ¿Tienen sentido los cambios en su orden? Reconstruye el once inicial desde el `onPitch` final
+// (como computeMatchIntervals) y comprueba, cambio a cambio, que el que sale estaba en el campo
+// y el que entra no, y que al final quedan en el campo los que acabaron el partido. Devuelve null
+// si todo cuadra, o el cambio que no encaja.
+function findInvalidSub(match, subs) {
+  const sorted = [...subs].sort((a, b) => a.half - b.half || a.minute - b.minute);
+  const onField = new Set(match.onPitch || []);
+  [...sorted].reverse().forEach((s) => {
+    onField.delete(s.inId);
+    onField.add(s.outId);
+  });
+  for (const s of sorted) {
+    if (!onField.has(s.outId) || onField.has(s.inId)) return s;
+    onField.delete(s.outId);
+    onField.add(s.inId);
+  }
+  // Y al terminar tienen que quedar en el campo exactamente los que acabaron el partido
+  const finalOnPitch = new Set(match.onPitch || []);
+  if (onField.size !== finalOnPitch.size || [...onField].some((id) => !finalOnPitch.has(id))) {
+    return sorted.find((s) => onField.has(s.inId) !== finalOnPitch.has(s.inId)) || sorted[sorted.length - 1];
+  }
+  return null;
+}
+
+// Partido ya finalizado: corregir el minuto de un cambio (p.ej. se apuntó tarde). La parte se
+// deduce del minuto. Todo lo que depende de él (minutos jugados, notas, PDF) se recalcula solo.
+function EditSubMinutes({ match, onUpdate }) {
+  const L = Number(match.halfLength) || 45;
+  const [open, setOpen] = useState(false);
+  const [drafts, setDrafts] = useState({});
+  const [error, setError] = useState(null);
+  const [savedId, setSavedId] = useState(null);
+  const subs = [...(match.subs || [])].sort((a, b) => a.half - b.half || a.minute - b.minute);
+
+  function save(sub) {
+    const minute = Math.round(Number(drafts[sub.id]));
+    if (!minute || minute < 1 || minute > 2 * L) {
+      setError(`El minuto tiene que estar entre 1 y ${2 * L}.`);
+      return;
+    }
+    const half = minute <= L ? 1 : 2;
+    const nextSubs = match.subs.map((x) => (x.id === sub.id ? { ...x, minute, half } : x));
+    const bad = findInvalidSub(match, nextSubs);
+    if (bad) {
+      setError(
+        `Con el minuto ${minute}' los cambios no cuadran: en el ${bad.minute}' sale #${bad.outNumber} ${bad.outName} ` +
+          `y entra #${bad.inNumber} ${bad.inName}, pero ese orden es imposible. Revisa también los otros cambios de esos jugadores.`
+      );
+      return;
+    }
+    // La posición que heredó en Campo el que entra se mueve con el cambio
+    const positionHistory = (match.positionHistory || []).map((h) =>
+      h.playerId === sub.inId && h.half === sub.half && h.minute === sub.minute ? { ...h, half, minute } : h
+    );
+    onUpdate({ ...match, subs: nextSubs, positionHistory }, true);
+    setDrafts((d) => {
+      const { [sub.id]: _drop, ...rest } = d;
+      return rest;
+    });
+    setError(null);
+    setSavedId(sub.id);
+  }
+
+  return (
+    <div className="mp-card p-3 mb-5">
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between text-left">
+        <span className="text-xs uppercase tracking-wide" style={{ color: "var(--chalk-dim)" }}>
+          Corregir minutos de los cambios
+        </span>
+        <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 flex flex-col gap-2">
+          {subs.map((sub) => {
+            const draft = drafts[sub.id];
+            const changed = draft != null && String(draft) !== String(sub.minute);
+            return (
+              <div key={sub.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="number"
+                  min={1}
+                  max={2 * L}
+                  value={draft != null ? draft : sub.minute}
+                  onChange={(e) => {
+                    setDrafts((d) => ({ ...d, [sub.id]: e.target.value }));
+                    setSavedId(null);
+                  }}
+                  className="mp-input px-2 py-1.5 text-sm"
+                  style={{ width: 64 }}
+                />
+                <span className="flex-1 min-w-0">
+                  <span className="block truncate">Entra #{sub.inNumber} {sub.inName}</span>
+                  <span className="block text-xs truncate" style={{ color: "var(--chalk-dim)" }}>
+                    por #{sub.outNumber} {sub.outName} · {sub.half === 1 ? "1ª" : "2ª"} parte
+                  </span>
+                </span>
+                {changed ? (
+                  <button onClick={() => save(sub)} className="mp-btn mp-btn-primary px-3 py-1.5 text-xs font-semibold">
+                    Guardar
+                  </button>
+                ) : savedId === sub.id ? (
+                  <span className="text-xs" style={{ color: "var(--turf)" }}>Guardado ✓</span>
+                ) : null}
+              </div>
+            );
+          })}
+          {error && <div className="text-xs" style={{ color: "var(--crimson)" }}>{error}</div>}
+          <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+            Minuto total del partido (la 2ª parte empieza en el {L + 1}'). Los minutos jugados, las
+            notas y el PDF se recalculan solos.
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Partido ya finalizado: añadir acciones que se olvidaron registrar en directo (p.ej. dos
