@@ -8,8 +8,8 @@
 // pidiendo la conexión a mano en Ajustes, como hasta ahora.
 
 module.exports = (req, res) => {
-  const url = process.env.SUPABASE_URL || "";
-  const anonKey = process.env.SUPABASE_ANON_KEY || "";
+  const url = (process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
+  const anonKey = (process.env.SUPABASE_ANON_KEY || "").trim();
   res.setHeader("Cache-Control", "no-store");
   res.status(200).json(/^https:\/\//.test(url) && anonKey ? { url, anonKey } : {});
 };
