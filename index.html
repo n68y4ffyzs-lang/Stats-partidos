@@ -3912,12 +3912,23 @@ function rivalFormationSpots(formationId) {
   return spots;
 }
 
+// La misma 1-3-5-2 recogida en nuestra mitad (la izquierda en pantalla), en espejo con la
+// formación del rival: portero junto a nuestra portería y las líneas hasta el medio campo.
+// Es la colocación inicial de "Colocar automáticamente"; después se mueve cada uno donde se quiera.
+function ownHalfSlot(slot) {
+  const screenLeft = 5 + ((92 - slot.y) * 38) / 80;
+  return { ...slot, y: Math.round((100 - screenLeft) * 10) / 10 };
+}
+const FORMATION_1_3_5_2_OWN_HALF = FORMATION_1_3_5_2.map(ownHalfSlot);
+
 // Código de posición del hueco de formación más cercano a unas coordenadas del campo:
 // se usa para inferir "qué posición pasa a jugar" un jugador cuando se le coloca a mano.
+// Se mira tanto la formación a campo completo como la recogida en nuestra mitad, para que
+// retocar a un jugador colocado en nuestra mitad no le cambie la posición.
 function nearestPositionCode(x, y) {
   let best = null;
   let bestDist = Infinity;
-  FORMATION_1_3_5_2.forEach((slot) => {
+  [...FORMATION_1_3_5_2, ...FORMATION_1_3_5_2_OWN_HALF].forEach((slot) => {
     const d = (slot.x - x) ** 2 + (slot.y - y) ** 2;
     if (d < bestDist) {
       bestDist = d;
@@ -4042,8 +4053,8 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
   // Añade al histórico del partido el código de posición más cercano a unas coordenadas, con el
   // minuto exacto — pero solo si es distinto del último registrado para ese jugador, para no
   // llenar el histórico de entradas repetidas por pequeños retoques dentro de la misma zona.
-  function appendPositionHistory(history, playerId, coords) {
-    const code = nearestPositionCode(coords.x, coords.y);
+  function appendPositionHistory(history, playerId, coords, knownCode) {
+    const code = knownCode || nearestPositionCode(coords.x, coords.y);
     const last = [...history].reverse().find((h) => h.playerId === playerId);
     if (last && last.code === code) return history;
     return [
@@ -4066,14 +4077,14 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
     onUpdate({ ...match, positions: next }, true);
   }
 
-  // Coloca automáticamente a los titulares en formación 1-3-5-2 según el código de posición
-  // guardado en su ficha de plantilla. Los huecos sin jugador con ese código, o los jugadores
-  // cuya posición no encaja en ningún hueco libre, se quedan sin colocar para ajustarlos a mano.
+  // Coloca automáticamente a los titulares en formación 1-3-5-2, en nuestra mitad, según el
+  // código de posición guardado en su ficha de plantilla. Los huecos sin jugador con ese código,
+  // o los jugadores cuya posición no encaja en ningún hueco libre, se quedan sin colocar.
   function autoPlaceFormation() {
     if (placedIds.length > 0 && !window.confirm("Esto sustituirá la colocación actual de los jugadores ya puestos en el campo. ¿Continuar?")) {
       return;
     }
-    const slots = FORMATION_1_3_5_2.map((s) => ({ ...s, playerId: null }));
+    const slots = FORMATION_1_3_5_2_OWN_HALF.map((s) => ({ ...s, playerId: null }));
     rosterOnPitch.forEach((id) => {
       const p = playerById(id);
       if (!p.position) return;
@@ -4086,7 +4097,7 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
       if (!s.playerId) return;
       const coords = { x: s.x, y: s.y };
       nextPositions[s.playerId] = coords;
-      nextHistory = appendPositionHistory(nextHistory, s.playerId, coords);
+      nextHistory = appendPositionHistory(nextHistory, s.playerId, coords, s.code);
     });
     onUpdate({ ...match, positions: nextPositions, positionHistory: nextHistory }, true);
   }
@@ -4163,10 +4174,51 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
     setSelectedId(null);
   }
 
-  const rivalSpots = rivalFormationSpots(match.rivalFormation);
+  // Rival: al elegir formación se colocan sus 11 en su sitio; después se pueden arrastrar.
+  // Se guardan en el partido (rivalPositions, en % del campo en pantalla).
+  const rivalBase =
+    match.rivalFormation && Array.isArray(match.rivalPositions) && match.rivalPositions.length
+      ? match.rivalPositions
+      : rivalFormationSpots(match.rivalFormation);
+  const [rivalDrag, setRivalDrag] = useState(null); // { index, left, top }
+  const rivalSpots = rivalBase.map((spot, i) =>
+    rivalDrag && rivalDrag.index === i ? { left: rivalDrag.left, top: rivalDrag.top } : spot
+  );
 
   function setRivalFormation(id) {
-    onUpdate({ ...match, rivalFormation: id || null }, true);
+    onUpdate({ ...match, rivalFormation: id || null, rivalPositions: id ? rivalFormationSpots(id) : null }, true);
+  }
+
+  function rivalPointFromEvent(e) {
+    const rect = pitchRef.current.getBoundingClientRect();
+    return {
+      left: Math.min(97, Math.max(3, ((e.clientX - rect.left) / rect.width) * 100)),
+      top: Math.min(96, Math.max(4, ((e.clientY - rect.top) / rect.height) * 100)),
+    };
+  }
+
+  function handleRivalDown(e, index) {
+    // Con un jugador nuestro seleccionado, tocar un círculo rival cuenta como tocar el campo
+    if (selectedId || mode !== "mover" || !pitchRef.current) return;
+    e.stopPropagation();
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setRivalDrag({ index, ...rivalBase[index] });
+  }
+
+  function handleRivalMove(e) {
+    if (!rivalDrag) return;
+    setRivalDrag({ index: rivalDrag.index, ...rivalPointFromEvent(e) });
+  }
+
+  function handleRivalUp() {
+    if (!rivalDrag) return;
+    const moved = rivalBase[rivalDrag.index];
+    if (moved.left !== rivalDrag.left || moved.top !== rivalDrag.top) {
+      const next = rivalBase.map((spot, i) => (i === rivalDrag.index ? { left: rivalDrag.left, top: rivalDrag.top } : spot));
+      onUpdate({ ...match, rivalPositions: next }, true);
+    }
+    setRivalDrag(null);
   }
 
   return (
@@ -4280,11 +4332,16 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
           />
         )}
 
-        {/* Formación del rival: círculos rojos sin nombre, fijos y "transparentes" al toque, para
-            que no se mezclen con la selección de los nuestros ni con los cambios */}
+        {/* Formación del rival: círculos rojos sin nombre que se arrastran con el dedo. No se
+            seleccionan ni entran en los cambios: son solo una referencia táctica */}
         {rivalSpots.map((spot, i) => (
           <div
             key={`rival-${i}`}
+            onPointerDown={(e) => handleRivalDown(e, i)}
+            onPointerMove={handleRivalMove}
+            onPointerUp={handleRivalUp}
+            onPointerCancel={handleRivalUp}
+            onClick={(e) => { if (!selectedId) e.stopPropagation(); }}
             style={{
               position: "absolute",
               left: `${spot.left}%`,
@@ -4295,8 +4352,9 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
               borderRadius: "50%",
               background: "#E53935",
               border: "2px solid rgba(255,255,255,0.85)",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
-              pointerEvents: "none",
+              boxShadow: rivalDrag && rivalDrag.index === i ? "0 0 0 4px rgba(229,57,53,0.35)" : "0 1px 3px rgba(0,0,0,0.35)",
+              touchAction: "none",
+              cursor: selectedId ? "pointer" : "grab",
             }}
           />
         ))}
