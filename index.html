@@ -3859,6 +3859,65 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
 }
 
 /* ---------------------------------------------------------
+   Arrastrar fichas en las pizarras: si el dedo se mueve más de unos píxeles es un arrastre
+   (onDrop con la posición en % del contenedor y si se soltó dentro), y si no, un toque
+   (onTap, para seleccionar). Lo usan la Pizarra del partido y el editor de balón parado.
+--------------------------------------------------------- */
+const DRAG_THRESHOLD_PX = 6;
+
+function useTokenDrag(containerRef, { onTap, onDrop, enabled = true }) {
+  const [drag, setDrag] = useState(null); // { id, left, top, clientX, clientY }
+  const startRef = useRef(null);
+
+  function toPct(e) {
+    const r = containerRef.current.getBoundingClientRect();
+    return { left: ((e.clientX - r.left) / r.width) * 100, top: ((e.clientY - r.top) / r.height) * 100 };
+  }
+
+  function bind(id) {
+    return {
+      onPointerDown: (e) => {
+        if (!enabled || !containerRef.current) return;
+        e.stopPropagation();
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch (err) {
+          /* sin captura: el arrastre sigue funcionando dentro del elemento */
+        }
+        startRef.current = { id, x: e.clientX, y: e.clientY, moved: false };
+      },
+      onPointerMove: (e) => {
+        const st = startRef.current;
+        if (!st || st.id !== id) return;
+        if (!st.moved && Math.hypot(e.clientX - st.x, e.clientY - st.y) < DRAG_THRESHOLD_PX) return;
+        st.moved = true;
+        setDrag({ id, ...toPct(e), clientX: e.clientX, clientY: e.clientY });
+      },
+      onPointerUp: (e) => {
+        const st = startRef.current;
+        startRef.current = null;
+        if (!st || st.id !== id) return;
+        setDrag(null);
+        if (st.moved) {
+          const p = toPct(e);
+          onDrop(id, p, p.left >= 0 && p.left <= 100 && p.top >= 0 && p.top <= 100);
+        } else if (onTap) {
+          onTap(id);
+        }
+      },
+      onPointerCancel: () => {
+        startRef.current = null;
+        setDrag(null);
+      },
+      // El toque ya se ha gestionado en onPointerUp: que el click no llegue al campo
+      onClick: (e) => e.stopPropagation(),
+    };
+  }
+
+  return { drag, bind };
+}
+
+/* ---------------------------------------------------------
    Formación 1-3-5-2: huecos fijos en el campo (coordenadas 0..100, igual que
    las posiciones que ya se guardan al tocar el campo). x = ancho del campo
    (banda a banda), y = profundidad (100 = portería propia, 0 = ataque).
@@ -4160,19 +4219,27 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
     }
   }
 
-  function handlePitchClick(e) {
-    if (!selectedId || selectedIsBench || !pitchRef.current) return;
-    const rect = pitchRef.current.getBoundingClientRect();
-    // El campo se dibuja en horizontal (portería propia a la izquierda), pero las posiciones se
-    // guardan como siempre (campo vertical, portería propia abajo): x = 100 - y_pantalla, y = x_pantalla
-    const screenX = ((e.clientX - rect.left) / rect.width) * 100;
-    const screenY = ((e.clientY - rect.top) / rect.height) * 100;
-    setPosition(selectedId, {
-      x: Math.min(96, Math.max(4, screenY)),
-      y: Math.min(96, Math.max(4, 100 - screenX)),
-    });
-    setSelectedId(null);
+  // Tocar el césped solo quita la selección: los jugadores se mueven arrastrándolos
+  function handlePitchClick() {
+    if (selectedId) setSelectedId(null);
   }
+
+  // Arrastrar a un jugador nuestro (del campo o de "Sin colocar") y soltarlo en el campo.
+  // El campo se dibuja en horizontal (portería propia a la izquierda), pero las posiciones se
+  // guardan como siempre (campo vertical, portería propia abajo): x = y_pantalla, y = 100 - x_pantalla.
+  // Un toque sin arrastrar selecciona (para hacer un cambio o quitarlo del campo).
+  const ownDrag = useTokenDrag(pitchRef, {
+    enabled: mode === "mover",
+    onTap: (id) => handleSelect(id),
+    onDrop: (id, p, inside) => {
+      if (!inside) return;
+      setPosition(id, {
+        x: Math.min(96, Math.max(4, p.top)),
+        y: Math.min(96, Math.max(4, 100 - p.left)),
+      });
+      setSelectedId(null);
+    },
+  });
 
   // Rival: al elegir formación se colocan sus 11 en su sitio; después se pueden arrastrar.
   // Se guardan en el partido (rivalPositions, en % del campo en pantalla).
@@ -4198,11 +4265,14 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
   }
 
   function handleRivalDown(e, index) {
-    // Con un jugador nuestro seleccionado, tocar un círculo rival cuenta como tocar el campo
-    if (selectedId || mode !== "mover" || !pitchRef.current) return;
+    if (mode !== "mover" || !pitchRef.current) return;
     e.stopPropagation();
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* sin captura: el arrastre sigue funcionando dentro del círculo */
+    }
     setRivalDrag({ index, ...rivalBase[index] });
   }
 
@@ -4254,8 +4324,8 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
         {selectedId
           ? selectedIsBench
             ? `Toca al jugador del campo que sale por ${playerById(selectedId).name}`
-            : `Toca el campo para colocar a ${playerById(selectedId).name}, o un suplente para cambiarlo`
-          : "Toca un jugador y luego el campo para colocarlo, o toca un suplente para hacer un cambio"}
+            : `Toca un suplente para cambiar a ${playerById(selectedId).name}`
+          : "Arrastra a los jugadores (tuyos y del rival) para moverlos. Toca uno para hacer un cambio"}
       </div>
 
       <div
@@ -4341,7 +4411,7 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
             onPointerMove={handleRivalMove}
             onPointerUp={handleRivalUp}
             onPointerCancel={handleRivalUp}
-            onClick={(e) => { if (!selectedId) e.stopPropagation(); }}
+            onClick={(e) => e.stopPropagation()}
             style={{
               position: "absolute",
               left: `${spot.left}%`,
@@ -4354,7 +4424,7 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
               border: "2px solid rgba(255,255,255,0.85)",
               boxShadow: rivalDrag && rivalDrag.index === i ? "0 0 0 4px rgba(229,57,53,0.35)" : "0 1px 3px rgba(0,0,0,0.35)",
               touchAction: "none",
-              cursor: selectedId ? "pointer" : "grab",
+              cursor: "grab",
             }}
           />
         ))}
@@ -4363,25 +4433,26 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
           const p = playerById(id);
           const pos = positions[id];
           const selected = selectedId === id;
+          const dragging = ownDrag.drag && ownDrag.drag.id === id;
+          const left = dragging ? Math.min(97, Math.max(3, ownDrag.drag.left)) : 100 - pos.y;
+          const top = dragging ? Math.min(96, Math.max(4, ownDrag.drag.top)) : pos.x;
           return (
             <div
               key={id}
               className="flex flex-col items-center"
               style={{
                 position: "absolute",
-                left: `${100 - pos.y}%`,
-                top: `${pos.x}%`,
+                left: `${left}%`,
+                top: `${top}%`,
                 transform: "translate(-50%, -50%)",
                 pointerEvents: "none",
+                zIndex: dragging ? 5 : undefined,
               }}
             >
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleSelect(id);
-                }}
+                {...ownDrag.bind(id)}
                 className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
-                style={{ pointerEvents: "auto" }}
+                style={{ pointerEvents: "auto", touchAction: "none", cursor: "grab" }}
               >
                 {p.number}
               </button>
@@ -4468,17 +4539,35 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
         {unplacedIds.map((id) => {
           const p = playerById(id);
           const selected = selectedId === id;
+          const dragging = ownDrag.drag && ownDrag.drag.id === id;
           return (
             <button
               key={id}
-              onClick={() => handleSelect(id)}
+              {...ownDrag.bind(id)}
               className={`mp-shirt w-10 h-10 text-sm font-semibold ${selected ? "selected" : ""}`}
+              style={{ touchAction: "none", cursor: "grab", opacity: dragging ? 0.35 : 1 }}
             >
               {p.number}
             </button>
           );
         })}
       </div>
+      {/* Ficha que sigue al dedo al arrastrar desde "Sin colocar" hasta el campo */}
+      {ownDrag.drag && unplacedIds.includes(ownDrag.drag.id) && (
+        <div
+          className="mp-shirt w-10 h-10 text-sm font-semibold"
+          style={{
+            position: "fixed",
+            left: ownDrag.drag.clientX,
+            top: ownDrag.drag.clientY,
+            transform: "translate(-50%, -50%)",
+            pointerEvents: "none",
+            zIndex: 80,
+          }}
+        >
+          {playerById(ownDrag.drag.id).number}
+        </div>
+      )}
 
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
         Banquillo — toca un suplente y luego a quién sustituye
@@ -6919,13 +7008,6 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
   const [selected, setSelected] = useState(null); // { type: "slot", id } | { type: "ball" } | null
   const pitchRef = useRef(null);
 
-  function coordsFromEvent(e) {
-    const rect = pitchRef.current.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
-    return { x: clampPitchCoord(x, 3, 97), y: clampPitchCoord(y, 3, 94) };
-  }
-
   function addSlot() {
     const newSlot = { id: genId(), x: 50, y: 50 };
     onSave({ slots: [...slots, newSlot], ball });
@@ -6955,38 +7037,47 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
     setSelected(null);
   }
 
-  function handlePitchClick(e) {
-    if (!selected || !pitchRef.current) return;
-    const coords = coordsFromEvent(e);
-    if (selected.type === "slot") moveSlot(selected.id, coords);
-    else moveBall(coords);
-    setSelected(null);
-  }
+  // Las posiciones y el balón se mueven arrastrándolos; un toque los selecciona (para eliminarlos)
+  const tokenDrag = useTokenDrag(pitchRef, {
+    onTap: (id) => {
+      const already = selected && (id === "ball" ? selected.type === "ball" : selected.type === "slot" && selected.id === id);
+      setSelected(already ? null : id === "ball" ? { type: "ball" } : { type: "slot", id });
+    },
+    onDrop: (id, p) => {
+      const coords = { x: clampPitchCoord(p.left, 3, 97), y: clampPitchCoord(p.top, 3, 94) };
+      if (id === "ball") moveBall(coords);
+      else moveSlot(id, coords);
+    },
+  });
+  const posOf = (id, base) =>
+    tokenDrag.drag && tokenDrag.drag.id === id
+      ? { x: clampPitchCoord(tokenDrag.drag.left, 3, 97), y: clampPitchCoord(tokenDrag.drag.top, 3, 94) }
+      : base;
 
   return (
     <div>
       <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
         {selected
-          ? `Toca el campo para colocar ${selected.type === "ball" ? "el balón" : "esta posición"}`
-          : "Toca una posición o el balón y luego el campo para moverlo"}
+          ? `Toca "Eliminar" abajo para quitar ${selected.type === "ball" ? "el balón" : "esta posición"}, o arrástrala para moverla`
+          : "Arrastra una posición o el balón para moverlo. Tócalo para poder eliminarlo"}
       </div>
 
-      <MiniPitch pitchRef={pitchRef} onClick={handlePitchClick}>
+      <MiniPitch pitchRef={pitchRef} onClick={() => setSelected(null)}>
         {slots.map((slot) => {
           const isSelected = selected && selected.type === "slot" && selected.id === slot.id;
+          const pos = posOf(slot.id, slot);
           return (
             <button
               key={slot.id}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelected(isSelected ? null : { type: "slot", id: slot.id });
-              }}
+              {...tokenDrag.bind(slot.id)}
               className={`mp-shirt w-10 h-10 ${isSelected ? "selected" : ""}`}
               style={{
                 position: "absolute",
-                left: `${slot.x}%`,
-                top: `${slot.y}%`,
+                left: `${pos.x}%`,
+                top: `${pos.y}%`,
                 transform: "translate(-50%, -50%)",
+                touchAction: "none",
+                cursor: "grab",
               }}
             />
           );
@@ -6994,17 +7085,16 @@ function SetPieceFormationEditor({ slots, ball, onSave }) {
 
         {ball && (
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelected(selected && selected.type === "ball" ? null : { type: "ball" });
-            }}
+            {...tokenDrag.bind("ball")}
             className={`mp-shirt w-8 h-8 text-base ${selected && selected.type === "ball" ? "selected" : ""}`}
             style={{
               position: "absolute",
-              left: `${ball.x}%`,
-              top: `${ball.y}%`,
+              left: `${posOf("ball", ball).x}%`,
+              top: `${posOf("ball", ball).y}%`,
               transform: "translate(-50%, -50%)",
               background: selected && selected.type === "ball" ? undefined : "#F4F1E8",
+              touchAction: "none",
+              cursor: "grab",
             }}
           >
             ⚽
