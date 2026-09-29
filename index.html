@@ -338,7 +338,7 @@ function migrateUnscopedStorage(code, baseKeys) {
 // Perfil del equipo: viaja dentro de los datos (sincronizado por código de equipo) y se edita
 // en Ajustes o con el importador de la FFCV.
 function emptyTeamProfile() {
-  return { name: "", ffcvGroupCode: "", ffcvTeamCode: "", defaultHalfLength: 45 };
+  return { name: "", ffcvGroupCode: "", ffcvTeamCode: "", defaultHalfLength: 45, defaultFormation: "1-3-5-2" };
 }
 
 // Los datos de antes de existir el perfil eran todos del C.F. Nou Jove Castelló 'A' (los
@@ -349,6 +349,7 @@ const LEGACY_TEAM_PROFILE = {
   ffcvGroupCode: "905431893",
   ffcvTeamCode: "903635134",
   defaultHalfLength: 40,
+  defaultFormation: "1-3-5-2",
 };
 
 function normalizeTeamProfile(team) {
@@ -1002,6 +1003,7 @@ function SyncBadge({ status, onClick }) {
 function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
   const [name, setName] = useState(team.name);
   const [halfLength, setHalfLength] = useState(team.defaultHalfLength);
+  const [formation, setFormation] = useState(team.defaultFormation);
   const [groupCode, setGroupCode] = useState(team.ffcvGroupCode);
   const [teamCode, setTeamCode] = useState(team.ffcvTeamCode);
   const [groupTeams, setGroupTeams] = useState(null);
@@ -1010,13 +1012,15 @@ function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
   useEffect(() => {
     setName(team.name);
     setHalfLength(team.defaultHalfLength);
+    setFormation(team.defaultFormation);
     setGroupCode(team.ffcvGroupCode);
     setTeamCode(team.ffcvTeamCode);
-  }, [team.name, team.defaultHalfLength, team.ffcvGroupCode, team.ffcvTeamCode]);
+  }, [team.name, team.defaultHalfLength, team.defaultFormation, team.ffcvGroupCode, team.ffcvTeamCode]);
 
   const dirty =
     name.trim() !== team.name ||
     Number(halfLength) !== team.defaultHalfLength ||
+    formation !== team.defaultFormation ||
     groupCode.trim() !== team.ffcvGroupCode ||
     teamCode.trim() !== team.ffcvTeamCode;
 
@@ -1047,6 +1051,7 @@ function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
     onSave({
       name: name.trim(),
       defaultHalfLength: Math.min(Math.max(Number(halfLength) || 45, 10), 60),
+      defaultFormation: formation,
       ffcvGroupCode: groupCode.trim(),
       ffcvTeamCode: teamCode.trim(),
     });
@@ -1066,6 +1071,14 @@ function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
       </div>
       <div className="text-[11px] mb-1" style={labelStyle}>Duración de cada parte por defecto (minutos)</div>
       <input type="number" min={10} max={60} value={halfLength} onChange={(e) => setHalfLength(e.target.value)} className={inputCls + " mb-3"} />
+      <div className="text-[11px] mb-1" style={labelStyle}>
+        Formación por defecto (la de "Colocar automáticamente"; en cada partido se puede cambiar solo para ese partido)
+      </div>
+      <select value={formation} onChange={(e) => setFormation(e.target.value)} className={inputCls + " mb-3"}>
+        {RIVAL_FORMATIONS.map((f) => (
+          <option key={f.id} value={f.id}>{f.id}</option>
+        ))}
+      </select>
 
       <div className="text-[11px] mb-1" style={labelStyle}>
         FFCV: código de grupo (el número <span className="font-semibold">cod_grupo</span> de la página de tu
@@ -3265,7 +3278,7 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
 /* ---------------------------------------------------------
    Pantalla: Partido en directo
 --------------------------------------------------------- */
-function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpdate, onFinish, onBack, syncView }) {
+function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpdate, onFinish, onBack, syncView, defaultFormation }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [selectedPlayerId, setSelectedPlayerId] = useState(null);
   const [subOutId, setSubOutId] = useState(null);
@@ -3615,7 +3628,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
 
       {tab === "campo" && (
         <React.Fragment>
-          <FieldFormation match={match} squad={squad} crests={crests} playerById={playerById} onUpdate={onUpdate} />
+          <FieldFormation match={match} squad={squad} crests={crests} playerById={playerById} onUpdate={onUpdate} defaultFormation={defaultFormation} />
           <LiveSetPieceBoard
             match={match}
             squad={squad}
@@ -3978,16 +3991,151 @@ function ownHalfSlot(slot) {
   const screenLeft = 5 + ((92 - slot.y) * 38) / 80;
   return { ...slot, y: Math.round((100 - screenLeft) * 10) / 10 };
 }
-const FORMATION_1_3_5_2_OWN_HALF = FORMATION_1_3_5_2.map(ownHalfSlot);
+
+/* ---------------------------------------------------------
+   Formaciones propias: las mismas de la lista del rival. Cada línea (de la defensa al
+   ataque) lleva el código de posición de cada hueco, de izquierda a derecha, con las
+   posiciones que existen en Plantilla. La 1-3-5-2 conserva su dibujo original.
+   Formación por defecto: team.defaultFormation (dato del equipo); cada partido puede tener
+   la suya puntual en match.formation sin tocar la del equipo.
+--------------------------------------------------------- */
+const DEFAULT_FORMATION_ID = "1-3-5-2";
+const BACK_FOUR = ["DFI", "DFC", "DFC", "DFD"];
+const BACK_THREE = ["DFI", "DFC", "DFD"];
+const BACK_FIVE = ["CAI", "DFI", "DFC", "DFD", "CAD"];
+const TEAM_FORMATION_LINES = {
+  "1-4-4-2": [BACK_FOUR, ["CAI", "MC", "MC", "CAD"], ["DC", "DC"]],
+  "1-4-3-3": [BACK_FOUR, ["MC", "MC", "MC"], ["DC", "DC", "DC"]],
+  "1-4-2-3-1": [BACK_FOUR, ["MC", "MC"], ["MCO", "MCO", "MCO"], ["DC"]],
+  "1-4-1-4-1": [BACK_FOUR, ["MC"], ["CAI", "MCO", "MCO", "CAD"], ["DC"]],
+  "1-4-5-1": [BACK_FOUR, ["CAI", "MC", "MC", "MC", "CAD"], ["DC"]],
+  "1-4-4-1-1": [BACK_FOUR, ["CAI", "MC", "MC", "CAD"], ["MCO"], ["DC"]],
+  "1-3-4-3": [BACK_THREE, ["CAI", "MC", "MC", "CAD"], ["DC", "DC", "DC"]],
+  "1-5-3-2": [BACK_FIVE, ["MC", "MCO", "MC"], ["DC", "DC"]],
+  "1-5-4-1": [BACK_FIVE, ["MC", "MC", "MC", "MC"], ["DC"]],
+};
+
+// Huecos a campo completo (mismas coordenadas que FORMATION_1_3_5_2): portero atrás y las
+// líneas repartidas en profundidad; en cada línea, los jugadores centrados y más abiertos
+// cuantos más son.
+function formationSlots(formationId) {
+  if (formationId === "1-3-5-2" || !TEAM_FORMATION_LINES[formationId]) return FORMATION_1_3_5_2;
+  const lines = TEAM_FORMATION_LINES[formationId];
+  const slots = [{ code: "PT", x: 50, y: 92 }];
+  lines.forEach((codes, li) => {
+    const y = lines.length === 1 ? 76 : 76 - (li * 62) / (lines.length - 1);
+    const n = codes.length;
+    const span = n <= 1 ? 0 : Math.min(76, (n - 1) * 24);
+    codes.forEach((code, i) => {
+      slots.push({ code, x: n === 1 ? 50 : 50 - span / 2 + (i * span) / (n - 1), y: Math.round(y * 10) / 10 });
+    });
+  });
+  return slots;
+}
+
+// La misma formación recogida en nuestra mitad (colocación inicial de "Colocar automáticamente")
+function formationSlotsOwnHalf(formationId) {
+  return formationSlots(formationId).map(ownHalfSlot);
+}
+
+// Qué tan lejos está una posición de otra: líneas de distancia (al cuadrado, para que sea
+// preferible mover a varios jugadores un poco que a uno muy lejos) y cambio de lado.
+// Los carrileros van entre la defensa y el medio; un defensa de banda que pasa a central apenas
+// cambia de papel (así, en una defensa de 4 el central extra sale de los defensas de banda y
+// el carrilero pasa a lateral, en vez de meter al carrilero de central).
+const POSITION_DEPTH = { PT: 0, DFI: 1, DFC: 1, DFD: 1, CAI: 1.5, CAD: 1.5, MC: 3, MCO: 4, DC: 5 };
+const POSITION_SIDE = { DFI: "L", CAI: "L", DFD: "R", CAD: "R" };
+const IMPOSSIBLE_COST = 1000;
+
+function positionCost(playerCode, slotCode) {
+  if ((playerCode === "PT") !== (slotCode === "PT")) return IMPOSSIBLE_COST; // la portería, solo porteros
+  const depth = (POSITION_DEPTH[playerCode] || 0) - (POSITION_DEPTH[slotCode] || 0);
+  const a = POSITION_SIDE[playerCode] || "C";
+  const b = POSITION_SIDE[slotCode] || "C";
+  let side = 0;
+  if (a !== b) side = a === "C" || b === "C" ? 1 : 2;
+  if (slotCode === "DFC" && (playerCode === "DFI" || playerCode === "DFD")) side = 0.5;
+  return 3 * depth * depth + side;
+}
+
+// Asignación de coste mínimo (algoritmo húngaro) sobre una matriz cuadrada n×n
+function minCostAssignment(cost) {
+  const n = cost.length;
+  const u = new Array(n + 1).fill(0);
+  const v = new Array(n + 1).fill(0);
+  const p = new Array(n + 1).fill(0);
+  const way = new Array(n + 1).fill(0);
+  for (let i = 1; i <= n; i++) {
+    p[0] = i;
+    let j0 = 0;
+    const minv = new Array(n + 1).fill(Infinity);
+    const used = new Array(n + 1).fill(false);
+    do {
+      used[j0] = true;
+      const i0 = p[j0];
+      let delta = Infinity;
+      let j1 = 0;
+      for (let j = 1; j <= n; j++) {
+        if (used[j]) continue;
+        const cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+        if (cur < minv[j]) {
+          minv[j] = cur;
+          way[j] = j0;
+        }
+        if (minv[j] < delta) {
+          delta = minv[j];
+          j1 = j;
+        }
+      }
+      for (let j = 0; j <= n; j++) {
+        if (used[j]) {
+          u[p[j]] += delta;
+          v[j] -= delta;
+        } else {
+          minv[j] -= delta;
+        }
+      }
+      j0 = j1;
+    } while (p[j0] !== 0);
+    do {
+      const j1 = way[j0];
+      p[j0] = p[j1];
+      j0 = j1;
+    } while (j0);
+  }
+  const rowToCol = new Array(n).fill(-1);
+  for (let j = 1; j <= n; j++) if (p[j]) rowToCol[p[j] - 1] = j - 1;
+  return rowToCol;
+}
+
+// Reparte a los jugadores (con su posición de Plantilla) en los huecos de una formación
+// buscando el reparto que menos los aleja de su posición: si falta un hueco de su posición,
+// se recoloca en cadena a los más parecidos (p. ej. un defensa izquierdo pasa a central y un
+// carrilero a lateral) antes que mandar a alguien lejos. Devuelve [{ ...hueco, playerId }].
+function assignPlayersToSlots(slots, players) {
+  const result = slots.map((sl) => ({ ...sl, playerId: null }));
+  const withPos = players.filter((p) => p.position);
+  const n = Math.max(withPos.length, slots.length);
+  if (!n) return result;
+  const cost = Array.from({ length: n }, (_, i) =>
+    Array.from({ length: n }, (_, j) => (i < withPos.length && j < slots.length ? positionCost(withPos[i].position, slots[j].code) : 0))
+  );
+  const assignment = minCostAssignment(cost);
+  withPos.forEach((p, i) => {
+    const j = assignment[i];
+    if (j >= 0 && j < slots.length && cost[i][j] < IMPOSSIBLE_COST) result[j].playerId = p.id;
+  });
+  return result;
+}
 
 // Código de posición del hueco de formación más cercano a unas coordenadas del campo:
 // se usa para inferir "qué posición pasa a jugar" un jugador cuando se le coloca a mano.
-// Se mira tanto la formación a campo completo como la recogida en nuestra mitad, para que
-// retocar a un jugador colocado en nuestra mitad no le cambie la posición.
-function nearestPositionCode(x, y) {
+// Se mira la formación activa del partido tanto a campo completo como recogida en nuestra
+// mitad, para que retocar a un jugador colocado en nuestra mitad no le cambie la posición.
+function nearestPositionCode(x, y, formationId = DEFAULT_FORMATION_ID) {
   let best = null;
   let bestDist = Infinity;
-  [...FORMATION_1_3_5_2, ...FORMATION_1_3_5_2_OWN_HALF].forEach((slot) => {
+  [...formationSlots(formationId), ...formationSlotsOwnHalf(formationId)].forEach((slot) => {
     const d = (slot.x - x) ** 2 + (slot.y - y) ** 2;
     if (d < bestDist) {
       bestDist = d;
@@ -4000,7 +4148,7 @@ function nearestPositionCode(x, y) {
 /* ---------------------------------------------------------
    Campo: colocar a cada jugador en su posición
 --------------------------------------------------------- */
-function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
+function FieldFormation({ match, squad, crests, playerById, onUpdate, defaultFormation = DEFAULT_FORMATION_ID }) {
   const [selectedId, setSelectedId] = useState(null);
   const pitchRef = useRef(null);
   const positions = match.positions || {};
@@ -4113,7 +4261,7 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
   // minuto exacto — pero solo si es distinto del último registrado para ese jugador, para no
   // llenar el histórico de entradas repetidas por pequeños retoques dentro de la misma zona.
   function appendPositionHistory(history, playerId, coords, knownCode) {
-    const code = knownCode || nearestPositionCode(coords.x, coords.y);
+    const code = knownCode || nearestPositionCode(coords.x, coords.y, activeFormation);
     const last = [...history].reverse().find((h) => h.playerId === playerId);
     if (last && last.code === code) return history;
     return [
@@ -4136,29 +4284,41 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
     onUpdate({ ...match, positions: next }, true);
   }
 
-  // Coloca automáticamente a los titulares en formación 1-3-5-2, en nuestra mitad, según el
-  // código de posición guardado en su ficha de plantilla. Los huecos sin jugador con ese código,
-  // o los jugadores cuya posición no encaja en ningún hueco libre, se quedan sin colocar.
+  // Formación de este partido: la puntual si se eligió una, si no la del equipo
+  const activeFormation = match.formation || defaultFormation;
+
+  // Coloca a los titulares en la formación indicada, en nuestra mitad, según la posición de su
+  // ficha de Plantilla (exacta o la más parecida). Los que no encajan se quedan sin colocar.
+  // Devuelve los campos del partido que cambian (para combinarlos con otros cambios).
+  function placementFor(formationId) {
+    const slots = assignPlayersToSlots(formationSlotsOwnHalf(formationId), rosterOnPitch.map((id) => playerById(id)));
+    const nextPositions = { ...positions };
+    let nextHistory = match.positionHistory || [];
+    slots.forEach((sl) => {
+      if (!sl.playerId) return;
+      const coords = { x: sl.x, y: sl.y };
+      nextPositions[sl.playerId] = coords;
+      nextHistory = appendPositionHistory(nextHistory, sl.playerId, coords, sl.code);
+    });
+    return { positions: nextPositions, positionHistory: nextHistory };
+  }
+
   function autoPlaceFormation() {
     if (placedIds.length > 0 && !window.confirm("Esto sustituirá la colocación actual de los jugadores ya puestos en el campo. ¿Continuar?")) {
       return;
     }
-    const slots = FORMATION_1_3_5_2_OWN_HALF.map((s) => ({ ...s, playerId: null }));
-    rosterOnPitch.forEach((id) => {
-      const p = playerById(id);
-      if (!p.position) return;
-      const slot = slots.find((s) => s.code === p.position && !s.playerId);
-      if (slot) slot.playerId = id;
-    });
-    const nextPositions = { ...positions };
-    let nextHistory = match.positionHistory || [];
-    slots.forEach((s) => {
-      if (!s.playerId) return;
-      const coords = { x: s.x, y: s.y };
-      nextPositions[s.playerId] = coords;
-      nextHistory = appendPositionHistory(nextHistory, s.playerId, coords, s.code);
-    });
-    onUpdate({ ...match, positions: nextPositions, positionHistory: nextHistory }, true);
+    onUpdate({ ...match, ...placementFor(activeFormation) }, true);
+  }
+
+  // Formación puntual de este partido ("" = la del equipo). No cambia la formación del equipo.
+  // Si ya hay jugadores colocados, se pregunta si recolocarlos en la nueva formación.
+  function setMatchFormation(id) {
+    const formation = id && id !== defaultFormation ? id : null;
+    const target = formation || defaultFormation;
+    const replace =
+      rosterOnPitch.length > 0 &&
+      (placedIds.length === 0 || window.confirm(`¿Recolocar a los jugadores en ${target}?`));
+    onUpdate({ ...match, formation, ...(replace ? placementFor(target) : {}) }, true);
   }
 
   function substitute(outId, inId) {
@@ -4300,9 +4460,24 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate }) {
             className="mp-btn mp-btn-outline flex-1 py-2 text-sm"
             style={{ minWidth: 200 }}
           >
-            Colocar automáticamente (1-3-5-2)
+            Colocar automáticamente ({activeFormation})
           </button>
         )}
+        <label className="mp-btn mp-btn-outline flex-1 flex items-center justify-center gap-2 py-1 text-sm" style={{ minWidth: 200 }}>
+          <span className="mp-dot" style={{ background: "var(--turf)" }} />
+          <span style={{ color: "var(--chalk-dim)" }}>Nosotros:</span>
+          <select
+            value={match.formation || ""}
+            onChange={(e) => setMatchFormation(e.target.value)}
+            className="bg-transparent text-sm font-semibold py-1"
+            style={{ color: "var(--chalk)", outline: "none" }}
+          >
+            <option value="" style={{ color: "#111" }}>{defaultFormation} (la del equipo)</option>
+            {RIVAL_FORMATIONS.filter((f) => f.id !== defaultFormation).map((f) => (
+              <option key={f.id} value={f.id} style={{ color: "#111" }}>{f.id} (solo este partido)</option>
+            ))}
+          </select>
+        </label>
         <label className="mp-btn mp-btn-outline flex-1 flex items-center justify-center gap-2 py-1 text-sm" style={{ minWidth: 200 }}>
           <span className="mp-dot" style={{ background: "#E53935" }} />
           <span style={{ color: "var(--chalk-dim)" }}>Rival:</span>
@@ -9374,6 +9549,7 @@ function App() {
             onFinish={finishMatch}
             onBack={goHome}
             syncView={syncView}
+            defaultFormation={team.defaultFormation}
           />
         )}
         {view === "summary" && match && (
