@@ -357,6 +357,12 @@ function normalizeTeamProfile(team) {
   return { ...emptyTeamProfile(), ...team };
 }
 
+// Sin jugadores ni partidos: datos recién creados en un dispositivo, que nunca deben pisar a
+// los de la nube aunque tengan una fecha más reciente
+function isEmptyData(d) {
+  return !d || (!(d.squad || []).length && !(d.matchesList || []).length);
+}
+
 // Datos de un equipo que empieza de cero en este dispositivo
 function freshTeamData() {
   return { ...emptyData(), team: emptyTeamProfile() };
@@ -1114,7 +1120,8 @@ function TeamProfileCard({ team, crests, onSave, onSaveCrest }) {
 
 // Primera vez con una cuenta sin equipo: buscador por nombre (como "Buscar por rival", pero
 // contra la FFCV). Al elegir el equipo la app se configura sola: escudo, clasificación y calendario.
-function TeamSetup({ onChoose, onSkip }) {
+function TeamSetup({ onChoose, onSkip, mode = "first", currentName, confirmChoice }) {
+  const changing = mode === "change";
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1150,6 +1157,7 @@ function TeamSetup({ onChoose, onSkip }) {
   }, [query]);
 
   async function choose(team) {
+    if (confirmChoice && !confirmChoice(team)) return;
     setChoosing(team);
     const group = await onChoose(team);
     if (group) onSkip();
@@ -1160,10 +1168,11 @@ function TeamSetup({ onChoose, onSkip }) {
   return (
     <div className="mp-app" style={{ position: "fixed", inset: 0, zIndex: 60, overflowY: "auto", background: "var(--pitch)" }}>
       <div className="max-w-md mx-auto p-4 pb-10">
-        <h1 className="display text-2xl font-semibold pt-2 mb-1">Busca tu equipo</h1>
+        <h1 className="display text-2xl font-semibold pt-2 mb-1">{changing ? "Cambiar de equipo" : "Busca tu equipo"}</h1>
         <p className="text-sm mb-4" style={dim}>
-          Escribe el nombre de tu club y elige tu equipo. La app traerá su escudo, la clasificación
-          y el calendario de la FFCV.
+          {changing
+            ? `Ahora tienes ${currentName ? `«${currentName}»` : "un equipo"}. Busca tu club y elige el equipo correcto: se traerán su escudo, la clasificación y el calendario de la FFCV.`
+            : "Escribe el nombre de tu club y elige tu equipo. La app traerá su escudo, la clasificación y el calendario de la FFCV."}
         </p>
 
         {choosing ? (
@@ -1207,11 +1216,14 @@ function TeamSetup({ onChoose, onSkip }) {
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold truncate">{t.nombre}</span>
                     <span className="block text-xs truncate" style={dim}>{t.categoria}</span>
+                    {changing && currentName && t.nombre === currentName && (
+                      <span className="block text-[10px]" style={{ color: "var(--turf)" }}>(nombre del equipo actual)</span>
+                    )}
                   </span>
                 </button>
               ))}
             </div>
-            <button onClick={onSkip} className="text-xs mt-4" style={dim}>Ahora no</button>
+            <button onClick={onSkip} className="text-xs mt-4" style={dim}>{changing ? "Cancelar" : "Ahora no"}</button>
           </>
         )}
       </div>
@@ -1498,6 +1510,7 @@ function SyncSettings({
   ratingConfig,
   onSaveRatingConfig,
   isOwner,
+  onChangeTeam,
   team,
   crests,
   onSaveTeam,
@@ -1564,6 +1577,23 @@ function SyncSettings({
           onSignOut={onSignOut}
           onResetPassword={onResetPassword}
         />
+        {team && onChangeTeam && (
+          <div className="mp-card p-3 mb-4">
+            <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Mi equipo</label>
+            <div className="flex items-center gap-3 mt-2 mb-3">
+              <CrestImage src={crests && crests.own} size={40} empty />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold truncate">{team.name || "Sin equipo elegido"}</div>
+                <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                  {team.ffcvGroupCode ? "Clasificación y calendario de la FFCV" : "Sin liga de la FFCV vinculada"}
+                </div>
+              </div>
+            </div>
+            <button onClick={onChangeTeam} className="mp-btn mp-btn-outline w-full py-2 text-sm">
+              Cambiar de equipo
+            </button>
+          </div>
+        )}
         {team && onSaveTeam && <TeamFormationCard team={team} onSave={onSaveTeam} />}
         <RatingSettings config={ratingConfig} onSave={onSaveRatingConfig} />
       </div>
@@ -8364,6 +8394,7 @@ function App() {
   // sabe si ya tiene equipo elegido, así que no se muestra el buscador de equipo)
   const [cloudCheckedFor, setCloudCheckedFor] = useState("");
   const [skipTeamSetup, setSkipTeamSetup] = useState(false);
+  const [changingTeam, setChangingTeam] = useState(false);
   const [supabaseConfig, setSupabaseConfig] = useState(getStoredSupabaseConfig);
   const [syncStatus, setSyncStatus] = useState("unconfigured");
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
@@ -8611,6 +8642,13 @@ function App() {
         return;
       }
       const remoteUpdatedAt = row ? new Date(row.updated_at).getTime() : 0;
+      if (row && row.data && isEmptyData(snapshot) && !isEmptyData(row.data)) {
+        // Este dispositivo no tiene datos y la nube sí: se descarga en vez de subir
+        applyRemoteData(row.data, remoteUpdatedAt);
+        setPending([]);
+        result = "retry-now";
+        return;
+      }
       let toUpload = snapshot;
       if (row && row.data && remoteUpdatedAt > getLastRemoteUpdatedAt()) {
         const merged = mergePendingIntoRemote(row.data, snapshot, pendingRef.current);
@@ -8697,7 +8735,7 @@ function App() {
       if (ownerRef.current !== code) return; // cambió de equipo mientras se descargaba
       if (row && row.data) {
         const remoteUpdatedAt = new Date(row.updated_at).getTime();
-        if (remoteUpdatedAt > dataRef.current.updatedAt) {
+        if (remoteUpdatedAt > dataRef.current.updatedAt || (isEmptyData(dataRef.current) && !isEmptyData(row.data))) {
           applyRemoteData(row.data, remoteUpdatedAt);
         } else if (dataRef.current.updatedAt > remoteUpdatedAt) {
           if ((await pushToSupabase(dataRef.current)) !== "ok") return;
@@ -8730,7 +8768,8 @@ function App() {
     retryTimerRef.current = null;
     retryAttemptRef.current = 0;
 
-    const carryOver = !prevId && id && localStorage.getItem(teamKey(DATA_KEY, id)) == null;
+    const carryOver =
+      !prevId && id && localStorage.getItem(teamKey(DATA_KEY, id)) == null && !isEmptyData(dataRef.current);
     const current = dataRef.current;
     setActiveTeamCode(id);
     ownerRef.current = id;
@@ -9159,7 +9198,26 @@ function App() {
   // Buscador de equipo (cuentas nuevas): con el equipo elegido se averigua su grupo de liga y
   // se guardan nombre, códigos FFCV y duración de las partes; después se traen su escudo, los
   // escudos de los rivales y el calendario. La clasificación sale sola con el grupo guardado.
-  async function chooseFfcvTeam(t) {
+  // Con `replace` (cambiar de equipo desde Ajustes): antes se quitan los partidos programados, aún
+  // sin jugar, que vinieron del calendario del equipo anterior, y el escudo propio pasa a ser el
+  // del equipo nuevo. Plantilla, partidos jugados, estadísticas y notas no se tocan.
+  async function chooseFfcvTeam(t, { replace = false } = {}) {
+    if (replace) {
+      const prevCode = normalizeTeamProfile(dataRef.current.team).ffcvTeamCode;
+      const cur = dataRef.current;
+      const stale = (cur.matchesList || [])
+        .filter((m) => m.scheduled && !m.finished && m.ffcvTeamCode && m.ffcvTeamCode === prevCode && prevCode !== t.codequipo)
+        .map((m) => m.id);
+      const crests = cur.crests || emptyCrests();
+      const byId = { ...cur.matchesById };
+      stale.forEach((id) => delete byId[id]);
+      commit({
+        ...cur,
+        matchesList: cur.matchesList.filter((m) => !stale.includes(m.id)),
+        matchesById: byId,
+        crests: t.escudo ? crests : { ...crests, own: null },
+      });
+    }
     let group = null;
     try {
       const r = await fetch(
@@ -9223,6 +9281,9 @@ function App() {
   useEffect(() => {
     const c = data.crests;
     if (!c || (c.ownNoBg && c.rivalsNoBg)) return;
+    // Sin escudos no hay nada que convertir: no se guarda nada (un dispositivo nuevo no debe
+    // marcar sus datos vacíos como "más recientes" que los de la nube)
+    if (!c.own && !Object.keys(c.rivals || {}).length) return;
     (async () => {
       const own = c.own && !c.ownNoBg ? await removeWhiteBackground(c.own) : c.own;
       let rivals = c.rivals;
@@ -9419,6 +9480,7 @@ function App() {
           finished: false,
           scheduled: true,
           isHome: f.isHome,
+          ffcvTeamCode: profile.ffcvTeamCode, // de qué equipo de la FFCV viene este partido del calendario
           clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
           onPitch: [],
           bench: squad.map((p) => p.id),
@@ -9441,6 +9503,7 @@ function App() {
             finished: false,
             scheduled: true,
             isHome: m.isHome,
+            ffcvTeamCode: m.ffcvTeamCode,
           })),
         ];
         const updatedById = { ...dataRef.current.matchesById };
@@ -9544,6 +9607,22 @@ function App() {
     <div className="mp-app">
       <GlobalStyles />
       {showTeamSetup && <TeamSetup onChoose={chooseFfcvTeam} onSkip={() => setSkipTeamSetup(true)} />}
+      {changingTeam && (
+        <TeamSetup
+          mode="change"
+          currentName={team.name}
+          onChoose={(t) => chooseFfcvTeam(t, { replace: true })}
+          confirmChoice={(t) =>
+            window.confirm(
+              `¿Cambiar tu equipo a «${t.nombre}» (${t.categoria})?\n\n` +
+                `Cambia el equipo de referencia de la FFCV: clasificación, calendario, escudo y rivales. ` +
+                `Los partidos programados que vinieron del calendario del equipo anterior y aún no se han jugado se quitan.\n\n` +
+                `No se toca ni se borra nada más: tu plantilla, los partidos jugados, las estadísticas y las puntuaciones se quedan igual.`
+            )
+          }
+          onSkip={() => setChangingTeam(false)}
+        />
+      )}
       <div style={isTabView ? { paddingBottom: 64 } : undefined}>
         {view === "home" && (
           <Home
@@ -9618,6 +9697,7 @@ function App() {
             ratingConfig={ratingConfig}
             onSaveRatingConfig={saveRatingConfig}
             isOwner={isOwnerAccount}
+            onChangeTeam={() => setChangingTeam(true)}
             team={team}
             crests={data.crests}
             onSaveTeam={saveTeamProfile}
