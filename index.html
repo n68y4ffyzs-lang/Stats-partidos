@@ -5380,17 +5380,23 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate, defaultFor
 /* ---------------------------------------------------------
    Eventos de equipo: no se asignan a un jugador (córners, ataques por banda...)
 --------------------------------------------------------- */
+// En columnas estrechas "+1" y "Deshacer" no caben en una fila: "Deshacer" baja a la siguiente
+// (flex-wrap) en lugar de salirse de la tarjeta e invadir la de al lado.
 function TeamEventCounter({ label, value, onAdd, onUndo }) {
   return (
-    <div className="mp-card p-3">
-      <div className="text-xs mb-1" style={{ color: "var(--chalk-dim)" }}>{label}</div>
+    <div className="mp-card p-3 min-w-0 overflow-hidden">
+      <div className="text-xs mb-1 truncate" style={{ color: "var(--chalk-dim)" }}>{label}</div>
       <div className="display text-3xl font-semibold leading-none mb-2">{value}</div>
-      <div className="flex gap-2">
-        <button onClick={onAdd} className="mp-btn mp-btn-primary px-3 py-1.5 text-xs flex-1">
+      <div className="flex flex-wrap gap-2">
+        <button onClick={onAdd} className="mp-btn mp-btn-primary px-3 py-1.5 text-xs flex-1" style={{ minWidth: "3rem" }}>
           +1
         </button>
         {value > 0 && (
-          <button onClick={onUndo} className="mp-btn mp-btn-outline px-3 py-1.5 text-xs" style={{ color: "var(--crimson)" }}>
+          <button
+            onClick={onUndo}
+            className="mp-btn mp-btn-outline px-3 py-1.5 text-xs flex-1 whitespace-nowrap"
+            style={{ color: "var(--crimson)" }}
+          >
             Deshacer
           </button>
         )}
