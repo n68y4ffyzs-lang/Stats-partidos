@@ -7076,7 +7076,10 @@ function PercentBreakdownChart({ title, segments }) {
   );
 }
 
-function TeamStatsCharts({ events, teamEvents = [] }) {
+// `matchesPlayed` (solo en Gráficos de la temporada): la tarjeta de eventos muestra la media
+// por partido (total ÷ partidos jugados, con un decimal) en vez del total. El resto de
+// tarjetas siguen con totales y porcentajes. En el resumen de un partido no se pasa.
+function TeamStatsCharts({ events, teamEvents = [], matchesPlayed }) {
   const totals = {};
   events.forEach((e) => {
     totals[e.type] = (totals[e.type] || 0) + 1;
@@ -7084,9 +7087,17 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
   const count = (t) => totals[t] || 0;
   const teamCount = (t) => teamEvents.filter((e) => e.type === t).length;
 
-  const eventRows = EVENT_TYPES.map((ev) => ({ label: ev.label, raw: count(ev.id), display: String(count(ev.id)) }))
-    .filter((r) => r.raw > 0)
+  const perMatch = matchesPlayed > 0;
+  const eventRows = EVENT_TYPES.map((ev) => {
+    const total = count(ev.id);
+    const value = perMatch ? total / matchesPlayed : total;
+    return { label: ev.label, raw: value, display: perMatch ? value.toFixed(1) : String(total), total };
+  })
+    .filter((r) => r.total > 0)
     .sort((a, b) => b.raw - a.raw);
+  const eventsTitle = perMatch
+    ? `Eventos por partido (media de ${matchesPlayed} partido${matchesPlayed === 1 ? "" : "s"})`
+    : "Eventos totales del equipo";
 
   const breakdowns = [
     {
@@ -7181,7 +7192,7 @@ function TeamStatsCharts({ events, teamEvents = [] }) {
 
   return (
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      <PlayerBarChart title="Eventos totales del equipo" color="var(--turf)" rows={eventRows} labelWidth="w-32" />
+      <PlayerBarChart title={eventsTitle} color="var(--turf)" rows={eventRows} labelWidth="w-32" />
       {breakdowns.map((b) => (
         <PercentBreakdownChart key={b.title} title={b.title} segments={b.segments} />
       ))}
@@ -7617,7 +7628,11 @@ function PlayerChartsScreen({ players, events, teamEvents, matches, onBack }) {
       {tab === "jugadores" ? (
         <PlayerStatsCharts players={players} events={events} matches={matches} />
       ) : (
-        <TeamStatsCharts events={events} teamEvents={teamEvents} />
+        <TeamStatsCharts
+          events={events}
+          teamEvents={teamEvents}
+          matchesPlayed={(matches || []).filter((m) => !m.scheduled).length}
+        />
       )}
     </div>
   );
