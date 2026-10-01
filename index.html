@@ -1296,7 +1296,7 @@ function helpFaqSections(isOwner) {
         {
           q: "¿Cómo asigno la posición de cada jugador (PT, DFC, MC...)?",
           a: [
-            "En Plantilla pulsa «Editar» en el jugador, elige la posición en el desplegable (PT portero, DFI/DFC/DFD defensas, CAI/CAD carrileros, MC mediocentro, MCO mediocentro ofensivo, DC delantero) y pulsa «Guardar».",
+            "En Plantilla pulsa «Editar» en el jugador, elige la posición en el desplegable (PT portero, DFI/DFC/DFD defensas, CAI/CAD carrileros, MCD mediocentro defensivo, MC mediocentro, MCO mediocentro ofensivo, SD segundo delantero, DC delantero) y pulsa «Guardar».",
             "La posición se usa para colocarle automáticamente en la Pizarra y para su puntuación, porque cada acción vale distinto según la posición. Si en un partido le mueves a otra zona en la Pizarra, la nota usa la posición que ocupaba en cada momento.",
           ],
         },
@@ -2966,8 +2966,10 @@ const PLAYER_POSITIONS = [
   { value: "DFD", label: "Defensa derecho" },
   { value: "CAI", label: "Carrilero izquierdo" },
   { value: "CAD", label: "Carrilero derecho" },
+  { value: "MCD", label: "Mediocentro defensivo" },
   { value: "MC", label: "Mediocentro" },
   { value: "MCO", label: "Mediocentro ofensivo" },
+  { value: "SD", label: "Segundo delantero" },
   { value: "DC", label: "Delantero" },
 ];
 const PLAYER_POSITION_LABEL = Object.fromEntries(PLAYER_POSITIONS.map((p) => [p.value, p.label]));
@@ -4556,11 +4558,11 @@ const BACK_THREE = ["DFI", "DFC", "DFD"];
 const BACK_FIVE = ["CAI", "DFI", "DFC", "DFD", "CAD"];
 const TEAM_FORMATION_LINES = {
   "1-4-4-2": [BACK_FOUR, ["CAI", "MC", "MC", "CAD"], ["DC", "DC"]],
-  "1-4-3-3": [BACK_FOUR, ["MC", "MC", "MC"], ["DC", "DC", "DC"]],
-  "1-4-2-3-1": [BACK_FOUR, ["MC", "MC"], ["MCO", "MCO", "MCO"], ["DC"]],
-  "1-4-1-4-1": [BACK_FOUR, ["MC"], ["CAI", "MCO", "MCO", "CAD"], ["DC"]],
+  "1-4-3-3": [BACK_FOUR, ["MC", "MCD", "MC"], ["DC", "DC", "DC"]],
+  "1-4-2-3-1": [BACK_FOUR, ["MCD", "MCD"], ["MCO", "MCO", "MCO"], ["DC"]],
+  "1-4-1-4-1": [BACK_FOUR, ["MCD"], ["CAI", "MCO", "MCO", "CAD"], ["DC"]],
   "1-4-5-1": [BACK_FOUR, ["CAI", "MC", "MC", "MC", "CAD"], ["DC"]],
-  "1-4-4-1-1": [BACK_FOUR, ["CAI", "MC", "MC", "CAD"], ["MCO"], ["DC"]],
+  "1-4-4-1-1": [BACK_FOUR, ["CAI", "MC", "MC", "CAD"], ["SD"], ["DC"]],
   "1-3-4-3": [BACK_THREE, ["CAI", "MC", "MC", "CAD"], ["DC", "DC", "DC"]],
   "1-5-3-2": [BACK_FIVE, ["MC", "MCO", "MC"], ["DC", "DC"]],
   "1-5-4-1": [BACK_FIVE, ["MC", "MC", "MC", "MC"], ["DC"]],
@@ -4594,7 +4596,7 @@ function formationSlotsOwnHalf(formationId) {
 // Los carrileros van entre la defensa y el medio; un defensa de banda que pasa a central apenas
 // cambia de papel (así, en una defensa de 4 el central extra sale de los defensas de banda y
 // el carrilero pasa a lateral, en vez de meter al carrilero de central).
-const POSITION_DEPTH = { PT: 0, DFI: 1, DFC: 1, DFD: 1, CAI: 1.5, CAD: 1.5, MC: 3, MCO: 4, DC: 5 };
+const POSITION_DEPTH = { PT: 0, DFI: 1, DFC: 1, DFD: 1, CAI: 1.5, CAD: 1.5, MCD: 2.5, MC: 3, MCO: 4, SD: 4.5, DC: 5 };
 const POSITION_SIDE = { DFI: "L", CAI: "L", DFD: "R", CAD: "R" };
 const IMPOSSIBLE_COST = 1000;
 
@@ -5967,18 +5969,25 @@ const RATING_POSITION_GROUP = {
   PT: "PT",
   DFI: "DEF", DFC: "DEF", DFD: "DEF",
   CAI: "CAR", CAD: "CAR",
+  MCD: "MCD",
   MC: "MC",
   MCO: "MCO",
+  SD: "SD",
   DC: "DC",
 };
 const RATING_GROUPS = [
   { id: "PT", label: "PT" },
   { id: "DEF", label: "Defensa" },
   { id: "CAR", label: "Carrilero" },
+  { id: "MCD", label: "MCD" },
   { id: "MC", label: "MC" },
   { id: "MCO", label: "MCO" },
+  { id: "SD", label: "SD" },
   { id: "DC", label: "DC" },
 ];
+// Columnas añadidas después: empiezan con los valores de la posición más parecida
+// (MCD como MC, SD como DC), también en las tablas ya personalizadas por cada equipo.
+const RATING_GROUP_SEED = { MCD: "MC", SD: "DC" };
 // Filas de la tabla de pesos. `ptOnly`: solo aplica al portero (celdas de otras posiciones deshabilitadas).
 const RATING_ROWS = [
   { key: "gol", label: "Gol" },
@@ -6018,6 +6027,11 @@ const DEFAULT_RATING_CONFIG = {
     gol_encajado: { PT: -0.3, DEF: null, CAR: null, MC: null, MCO: null, DC: null },
   },
 };
+Object.values(DEFAULT_RATING_CONFIG.weights).forEach((row) => {
+  Object.entries(RATING_GROUP_SEED).forEach(([id, from]) => {
+    if (!(id in row)) row[id] = row[from];
+  });
+});
 
 // Completa una config guardada con los valores por defecto que le falten (equipos antiguos
 // sin config, o filas nuevas); respeta los null que el entrenador haya dejado a propósito.
@@ -6032,7 +6046,10 @@ function normalizeRatingConfig(cfg) {
     RATING_GROUPS.forEach(({ id }) => {
       if (ptOnly && id !== "PT") weights[key][id] = null;
       else if (id in saved) weights[key][id] = typeof saved[id] === "number" && isFinite(saved[id]) ? saved[id] : null;
-      else weights[key][id] = def[id];
+      else if (RATING_GROUP_SEED[id] && RATING_GROUP_SEED[id] in saved) {
+        const v = saved[RATING_GROUP_SEED[id]];
+        weights[key][id] = typeof v === "number" && isFinite(v) ? v : null;
+      } else weights[key][id] = def[id];
     });
   });
   return {
