@@ -376,6 +376,7 @@ function emptyData() {
     setPiecePositions: {},
     crests: emptyCrests(),
     ratingConfig: null,
+    sanctions: [],
     updatedAt: 0,
   };
 }
@@ -662,6 +663,103 @@ function migrateSquadPositions(squad) {
   );
 }
 
+/* ---------------------------------------------------------
+   Sanciones (Plantilla → Sancionados). Viajan con los datos del equipo:
+   - data.sanctions: [{ id, playerId, reason: "roja" | "amarillas", count, matchId, opponent,
+     date, remaining, served: [matchId...] }]. Mientras `remaining` > 0 el jugador no se puede
+     convocar; al finalizar cada partido de liga se descuenta 1 (nunca en el partido que la
+     originó) y al llegar a 0 sale de la lista.
+   - data.sanctionTriggers: claves de los motivos ya tratados (cada roja, y cada múltiplo de 5
+     amarillas por jugador), para no volver a crear una sanción que se quitó a mano.
+   La primera vez (sin sanctionTriggers) se marcan como tratados los de partidos ya
+   finalizados: las sanciones no se aplican hacia atrás.
+--------------------------------------------------------- */
+function isLeagueMatch(m) {
+  return !m || m.competition !== "amistoso";
+}
+
+function sanctionTriggersOf(data) {
+  const matches = Object.values(data.matchesById || {})
+    .filter((m) => !m.scheduled)
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.id).localeCompare(String(b.id)));
+  const triggers = [];
+  const yellows = {};
+  matches.forEach((m) => {
+    [...(m.events || [])]
+      .sort((a, b) => a.half - b.half || a.minute - b.minute)
+      .forEach((e) => {
+        const base = { playerId: e.playerId, matchId: m.id, opponent: m.opponent, date: m.date, finished: !!m.finished };
+        if (e.type === "roja") triggers.push({ ...base, key: `roja:${e.id}`, reason: "roja" });
+        if (e.type === "amarilla") {
+          yellows[e.playerId] = (yellows[e.playerId] || 0) + 1;
+          if (yellows[e.playerId] % 5 === 0) {
+            triggers.push({ ...base, key: `amarillas:${e.playerId}:${yellows[e.playerId]}`, reason: "amarillas", count: yellows[e.playerId] });
+          }
+        }
+      });
+  });
+  return triggers;
+}
+
+// Crea las sanciones nuevas (roja, o cada 5 amarillas en la temporada) con 1 partido por defecto
+function applySanctionTriggers(data) {
+  const triggers = sanctionTriggersOf(data);
+  if (!Array.isArray(data.sanctionTriggers)) {
+    // Primera vez: lo de partidos ya finalizados no genera sanción
+    const done = triggers.filter((t) => t.finished).map((t) => t.key);
+    data = { ...data, sanctionTriggers: done };
+  }
+  const done = new Set(data.sanctionTriggers);
+  const fresh = triggers.filter((t) => !done.has(t.key));
+  if (!fresh.length) return data;
+  return {
+    ...data,
+    sanctionTriggers: [...data.sanctionTriggers, ...fresh.map((t) => t.key)],
+    sanctions: [
+      ...(data.sanctions || []),
+      ...fresh.map((t) => ({
+        id: genId(),
+        playerId: t.playerId,
+        reason: t.reason,
+        count: t.count || null,
+        matchId: t.matchId,
+        opponent: t.opponent,
+        date: t.date,
+        remaining: 1,
+        served: [],
+      })),
+    ],
+  };
+}
+
+// Al finalizar un partido de liga: 1 partido menos a cada sanción pendiente (salvo la que nació
+// en ese mismo partido); las que llegan a 0 salen de Sancionados.
+function serveSanctions(data, match) {
+  if (!isLeagueMatch(match)) return data;
+  const sanctions = (data.sanctions || [])
+    .map((s) =>
+      s.remaining > 0 && s.matchId !== match.id && !(s.served || []).includes(match.id)
+        ? { ...s, remaining: s.remaining - 1, served: [...(s.served || []), match.id] }
+        : s
+    )
+    .filter((s) => s.remaining > 0);
+  return { ...data, sanctions };
+}
+
+// { playerId: partidos pendientes } (si tiene varias sanciones, se suman)
+function pendingSanctionsByPlayer(data) {
+  const out = {};
+  (data.sanctions || []).forEach((s) => {
+    if (s.remaining > 0) out[s.playerId] = (out[s.playerId] || 0) + s.remaining;
+  });
+  return out;
+}
+
+function sanctionReasonText(s) {
+  if (s.reason === "roja") return `Roja${s.opponent ? ` vs ${s.opponent}` : ""}`;
+  return `${s.count || 5} amarillas${s.opponent ? ` (la última vs ${s.opponent})` : ""}`;
+}
+
 function loadLocalData() {
   try {
     const raw = localStorage.getItem(teamKey(DATA_KEY));
@@ -674,6 +772,8 @@ function loadLocalData() {
       matchesById: parsed.matchesById || {},
       setPiecePositions: migrateSetPiecePositions(parsed.setPiecePositions || {}),
       ratingConfig: parsed.ratingConfig || null,
+      sanctions: Array.isArray(parsed.sanctions) ? parsed.sanctions : [],
+      ...(Array.isArray(parsed.sanctionTriggers) ? { sanctionTriggers: parsed.sanctionTriggers } : {}),
       crests: {
         own: (parsed.crests && parsed.crests.own) || null,
         ownNoBg: !!(parsed.crests && parsed.crests.ownNoBg),
@@ -1279,7 +1379,7 @@ function helpFaqSections(isOwner) {
         {
           q: "¿Cómo pongo la alineación y el once inicial?",
           a: [
-            "En Inicio pulsa «Nuevo partido»: escribe el rival, la fecha, la duración de cada parte y si jugáis de local o visitante.",
+            "En Inicio pulsa «Nuevo partido»: escribe el rival, la fecha, la duración de cada parte, si jugáis de local o visitante y si es de liga o un amistoso.",
             "Con «Marcar once inicial» activado, toca a los titulares (se ponen en verde); el resto de convocados quedan como suplentes. Después pulsa «Empezar partido».",
             "Si la fecha es futura, el botón pasa a ser «Programar partido» y el once es opcional: el día del partido ábrelo desde Partidos, elige el once y pulsa «Empezar partido».",
             "La primera vez que eliges un once, la app te pregunta con qué formación jugáis normalmente.",
@@ -1291,6 +1391,16 @@ function helpFaqSections(isOwner) {
             "Son jugadores de tu plantilla que no van convocados a ese partido: no aparecen como suplentes y no cuentan para cambios ni estadísticas de ese partido.",
             "Al hacer la alineación pulsa «Marcar desconvocados» y toca a esos jugadores (se ponen en rojo). Puedes indicar un motivo (lesión, sanción, decisión técnica, motivos personales, enfermedad u otro), que es opcional.",
             "Con el partido ya empezado, en la pestaña «Jugadores y equipo» abre «Convocatoria» para desconvocar a un suplente que aún no haya jugado o volver a convocar a un desconvocado.",
+            "Los sancionados son otra cosa: salen solos como no convocables mientras tengan partidos de sanción pendientes (ver la pregunta sobre sanciones).",
+          ],
+        },
+        {
+          q: "¿Cómo funcionan las sanciones por tarjetas?",
+          a: [
+            "Cuando un jugador ve una roja, o cada vez que acumula 5 amarillas en la temporada (5, 10, 15...), la app lo añade a Plantilla → Sancionados con 1 partido de sanción.",
+            "Si el comité le pone más partidos, cámbialo ahí con «−» y «+» o escribiendo el número. «Quitar» le quita la sanción.",
+            "Mientras tenga partidos pendientes no se puede convocar: en el once inicial aparece bloqueado en «Sancionados» con los partidos que le quedan, y en el partido queda como desconvocado por sanción.",
+            "Cada vez que finalizas un partido de liga se descuenta 1 partido (no en el partido en que vio la tarjeta, y no en los amistosos). Al llegar a 0 sale de Sancionados y vuelve a estar disponible.",
           ],
         },
         {
@@ -1320,6 +1430,7 @@ function helpFaqSections(isOwner) {
           a: [
             "En la pestaña «Jugadores y equipo», toca al jugador en la lista «En el campo» y pulsa el botón del evento. El minuto se toma del cronómetro.",
             "Al pulsar «Gol» te pregunta cómo fue (de jugada, de córner, de falta o de penalti). En las tarjetas te pregunta el motivo (falta, protestar o último hombre).",
+            "Con una tarjeta roja, el jugador desaparece de «En el campo» y el equipo sigue con uno menos el resto del partido (aparece en «Expulsados»). Si la roja fue un error, al deshacerla vuelve al campo; la sanción que generó quítala en Plantilla → Sancionados.",
             "Cambio: pulsa «Cambiar» junto al jugador que sale y elige al que entra. También se puede en la Pizarra: toca un suplente y luego al jugador que sale.",
           ],
         },
@@ -2974,7 +3085,73 @@ const PLAYER_POSITIONS = [
 ];
 const PLAYER_POSITION_LABEL = Object.fromEntries(PLAYER_POSITIONS.map((p) => [p.value, p.label]));
 
-function SquadManager({ squad, matches, onSave, onBack }) {
+// Plantilla → Sancionados: jugadores con partidos de sanción pendientes (roja o 5 amarillas).
+// El número se puede ajustar (lo decide el comité); con 0 o "Quitar" sale de la lista.
+function SanctionsCard({ sanctions, squad, onUpdate }) {
+  const [drafts, setDrafts] = useState({});
+  const dim = { color: "var(--chalk-dim)" };
+  const list = (sanctions || [])
+    .filter((s) => s.remaining > 0)
+    .map((s) => ({ s, p: squad.find((pl) => pl.id === s.playerId) }))
+    .filter((x) => x.p)
+    .sort((a, b) => Number(a.p.number) - Number(b.p.number));
+
+  function set(s, value) {
+    const n = Math.max(0, Math.min(99, Math.round(Number(value) || 0)));
+    if (n === 0 && !window.confirm(`¿Quitar la sanción de ${squad.find((p) => p.id === s.playerId).name}? Volverá a estar disponible para convocar.`)) return;
+    setDrafts((d) => {
+      const { [s.id]: _x, ...rest } = d;
+      return rest;
+    });
+    onUpdate(s.id, n);
+  }
+
+  return (
+    <div className="mp-card p-3 mb-4" style={list.length ? { borderColor: "var(--crimson)" } : {}}>
+      <div className="text-xs uppercase tracking-wide mb-1" style={dim}>Sancionados</div>
+      {list.length === 0 ? (
+        <div className="text-xs" style={dim}>
+          Nadie. Una roja, o cada 5 amarillas en la temporada, sanciona automáticamente 1 partido.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 mt-1">
+          {list.map(({ s, p }) => {
+            const draft = drafts[s.id];
+            return (
+              <div key={s.id} className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate"><span className="font-semibold">#{p.number}</span> {p.name}</div>
+                  <div className="text-[11px] truncate" style={dim}>{sanctionReasonText(s)}</div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => set(s, s.remaining - 1)} className="mp-btn px-2 py-1 text-sm" aria-label="Un partido menos">−</button>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={draft != null ? draft : String(s.remaining)}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [s.id]: e.target.value.replace(/[^0-9]/g, "") }))}
+                    onBlur={() => draft != null && draft !== String(s.remaining) && set(s, draft)}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                    className="mp-input px-1 py-1 text-sm text-center"
+                    style={{ width: 40 }}
+                    aria-label="Partidos de sanción pendientes"
+                  />
+                  <button onClick={() => set(s, s.remaining + 1)} className="mp-btn px-2 py-1 text-sm" aria-label="Un partido más">+</button>
+                </div>
+                <button onClick={() => set(s, 0)} className="text-xs shrink-0" style={{ color: "var(--crimson)" }}>Quitar</button>
+              </div>
+            );
+          })}
+          <div className="text-[11px]" style={dim}>
+            Partidos pendientes de cumplir. Se descuenta 1 al finalizar cada partido de liga; no se pueden convocar hasta llegar a 0.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SquadManager({ squad, matches, onSave, onBack, sanctions = [], onUpdateSanction }) {
   const [players, setPlayers] = useState(squad);
   const [number, setNumber] = useState("");
   const [name, setName] = useState("");
@@ -3039,6 +3216,8 @@ function SquadManager({ squad, matches, onSave, onBack }) {
         </button>
         <h1 className="display text-2xl font-semibold">Plantilla</h1>
       </div>
+
+      {onUpdateSanction && <SanctionsCard sanctions={sanctions} squad={squad} onUpdate={onUpdateSanction} />}
 
       <div className="mp-card p-3 mb-4 flex flex-col gap-2">
         <div className="flex gap-2">
@@ -3190,12 +3369,20 @@ function uncalledReasonText(entry) {
   return r ? r.label : "Sin especificar";
 }
 
-function LineupPicker({ squad, titulares, setTitulares, desconvocados, setDesconvocados, optional }) {
+function LineupPicker({ squad, titulares, setTitulares, desconvocados, setDesconvocados, optional, sanctioned = {} }) {
   const [mode, setMode] = useState("titulares");
-  const sortedSquad = squad.slice().sort((a, b) => Number(a.number) - Number(b.number));
-  const uncalledIds = Object.keys(desconvocados).filter((id) => squad.some((p) => p.id === id));
+  // Los sancionados (Plantilla → Sancionados) no se pueden convocar: aparecen bloqueados
+  const sortedSquad = squad.slice().sort((a, b) => Number(a.number) - Number(b.number)).filter((p) => !sanctioned[p.id]);
+  const sanctionedPlayers = squad.filter((p) => sanctioned[p.id]).sort((a, b) => Number(a.number) - Number(b.number));
+  const uncalledIds = Object.keys(desconvocados).filter((id) => squad.some((p) => p.id === id) && !sanctioned[id]);
+
+  useEffect(() => {
+    if (titulares.some((id) => sanctioned[id])) setTitulares((prev) => prev.filter((id) => !sanctioned[id]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function tap(id) {
+    if (sanctioned[id]) return;
     if (mode === "titulares") {
       if (desconvocados[id]) return;
       setTitulares((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -3237,7 +3424,8 @@ function LineupPicker({ squad, titulares, setTitulares, desconvocados, setDescon
             : "Toca a los jugadores que no están convocados"}
         </label>
         <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>
-          {titulares.length} titulares · {uncalledIds.length} desconv.
+          {titulares.filter((id) => !sanctioned[id]).length} titulares · {uncalledIds.length} desconv.
+          {sanctionedPlayers.length > 0 ? ` · ${sanctionedPlayers.length} sancion.` : ""}
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -3260,6 +3448,25 @@ function LineupPicker({ squad, titulares, setTitulares, desconvocados, setDescon
           );
         })}
       </div>
+
+      {sanctionedPlayers.length > 0 && (
+        <div className="mt-3">
+          <div className="text-xs mb-1.5" style={{ color: "var(--chalk-dim)" }}>
+            Sancionados — no se pueden convocar
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {sanctionedPlayers.map((p) => (
+              <span key={p.id} className="mp-btn px-3 py-2 text-sm flex items-center gap-2" style={{ opacity: 0.55, cursor: "default" }}>
+                <span className="font-semibold">{p.number}</span>
+                <span style={{ textDecoration: "line-through" }}>{p.name}</span>
+                <span className="text-xs" style={{ color: "var(--crimson)" }}>
+                  {sanctioned[p.id]} partido{sanctioned[p.id] === 1 ? "" : "s"}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {uncalledIds.length > 0 && (
         <div className="mt-4">
@@ -3410,14 +3617,20 @@ function LiveUncalledPanel({ match, squad, playerById, onUpdate }) {
                       <span className="text-sm flex-1 min-w-0 truncate">
                         <span className="font-semibold">#{p.number}</span> {p.name}
                       </span>
-                      <button onClick={() => recall(id)} className="text-xs shrink-0" style={{ color: "var(--cielo)" }}>
-                        Volver a convocar
-                      </button>
+                      {desconvocados[id] && desconvocados[id].sanctioned ? (
+                        <span className="text-xs shrink-0" style={{ color: "var(--crimson)" }}>Sancionado</span>
+                      ) : (
+                        <button onClick={() => recall(id)} className="text-xs shrink-0" style={{ color: "var(--cielo)" }}>
+                          Volver a convocar
+                        </button>
+                      )}
                     </div>
-                    <UncalledReasonInput
-                      entry={desconvocados[id]}
-                      onChange={(patch, persistNow) => updateReason(id, patch, persistNow)}
-                    />
+                    {!(desconvocados[id] && desconvocados[id].sanctioned) && (
+                      <UncalledReasonInput
+                        entry={desconvocados[id]}
+                        onChange={(patch, persistNow) => updateReason(id, patch, persistNow)}
+                      />
+                    )}
                   </div>
                 );
               })}
@@ -3463,7 +3676,8 @@ function cleanUncalled(desconvocados) {
   return out;
 }
 
-function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, defaultHalfLength = 45, teamFormation, formationChosen, onChooseFormation }) {
+function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, defaultHalfLength = 45, teamFormation, formationChosen, onChooseFormation, sanctioned = {} }) {
+  const [competition, setCompetition] = useState("liga");
   const [opponent, setOpponent] = useState("");
   const [date, setDate] = useState(todayISO());
   const [halfLength, setHalfLength] = useState(defaultHalfLength);
@@ -3486,6 +3700,7 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, d
       titulares,
       desconvocados: cleanUncalled(desconvocados),
       isHome,
+      competition,
     });
   }
 
@@ -3573,6 +3788,29 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, d
         </div>
       </div>
 
+      <div className="mp-card p-3 mb-3">
+        <label className="text-xs" style={{ color: "var(--chalk-dim)" }}>Tipo de partido</label>
+        <div className="flex gap-2 mt-1">
+          <button
+            onClick={() => setCompetition("liga")}
+            className="mp-btn px-3 py-2 text-sm flex-1"
+            style={competition === "liga" ? { background: "var(--turf)", color: "#0F1B14", border: "none" } : {}}
+          >
+            Liga
+          </button>
+          <button
+            onClick={() => setCompetition("amistoso")}
+            className="mp-btn px-3 py-2 text-sm flex-1"
+            style={competition === "amistoso" ? { background: "var(--cielo)", color: "#0F1B14", border: "none" } : {}}
+          >
+            Amistoso
+          </button>
+        </div>
+        <div className="text-[11px] mt-1" style={{ color: "var(--chalk-dim)" }}>
+          Los amistosos no descuentan partidos de sanción.
+        </div>
+      </div>
+
       {isFuture && (
         <div className="mp-card p-3 mb-4 text-xs" style={{ color: "var(--chalk-dim)" }}>
           Esta fecha es futura: el partido se guardará como <span style={{ color: "var(--cielo)" }}>programado</span> en
@@ -3591,6 +3829,7 @@ function MatchSetup({ squad, crests, onSaveCrest, onCreate, onBack, onGoSquad, d
         desconvocados={desconvocados}
         setDesconvocados={setDesconvocados}
         optional={isFuture}
+        sanctioned={sanctioned}
       />
 
       <button
@@ -3705,7 +3944,7 @@ function TeamFormationCard({ team, onSave }) {
 /* ---------------------------------------------------------
    Pantalla: Partido programado (aún no empezado)
 --------------------------------------------------------- */
-function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, onBack, teamFormation, formationChosen, onChooseFormation }) {
+function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, onBack, teamFormation, formationChosen, onChooseFormation, sanctioned = {} }) {
   const [titulares, setTitulares] = useState(match.onPitch || []);
   const [desconvocados, setDesconvocados] = useState(match.desconvocados || {});
 
@@ -3759,6 +3998,7 @@ function ScheduledMatch({ match, squad, crests, onSaveCrest, onStart, onDelete, 
             setTitulares={setTitulares}
             desconvocados={desconvocados}
             setDesconvocados={setDesconvocados}
+            sanctioned={sanctioned}
           />
         </React.Fragment>
       )}
@@ -3805,6 +4045,17 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
   // Filtra jugadores que ya no están en la plantilla (p.ej. borrados después de convocarlos)
   const rosterOnPitch = match.onPitch.filter((id) => squad.some((p) => p.id === id));
   const rosterBench = match.bench.filter((id) => squad.some((p) => p.id === id));
+  // Expulsados (roja en este partido): dejan de poder seleccionarse, entrar o salir en un cambio;
+  // el equipo sigue con uno menos. Si se borra la roja, vuelven solos.
+  const sentOffIds = new Set((match.events || []).filter((e) => e.type === "roja").map((e) => e.playerId));
+  const activeOnPitch = rosterOnPitch.filter((id) => !sentOffIds.has(id));
+  const availableBench = rosterBench.filter((id) => !sentOffIds.has(id));
+  const sentOffList = [...rosterOnPitch, ...rosterBench].filter((id) => sentOffIds.has(id));
+  useEffect(() => {
+    if (selectedPlayerId && sentOffIds.has(selectedPlayerId)) setSelectedPlayerId(null);
+    if (subOutId && sentOffIds.has(subOutId)) setSubOutId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match.events]);
 
   const clockKey = match.clock.activeHalf === 1 ? "half1Elapsed" : "half2Elapsed";
 
@@ -4226,7 +4477,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
             En el campo — toca para seleccionar
           </div>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-1 lg:gap-1.5">
-            {rosterOnPitch.map((id) => {
+            {activeOnPitch.map((id) => {
               const p = playerById(id);
               const selected = selectedPlayerId === id;
               return (
@@ -4259,15 +4510,22 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
             })}
           </div>
 
+          {sentOffList.length > 0 && (
+            <div className="mt-2 text-xs" style={{ color: "var(--crimson)" }}>
+              Expulsados ({activeOnPitch.length} en el campo):{" "}
+              {sentOffList.map((id) => `#${playerById(id).number} ${playerById(id).name}`).join(", ")}
+            </div>
+          )}
+
           {/* Banquillo: incluye a los que ya han sido sustituidos, que pueden volver a entrar */}
           <div className="mt-3 mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
             Banquillo — pulsa "Cambiar" en un jugador del campo para que entre uno
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {rosterBench.length === 0 && (
+            {availableBench.length === 0 && (
               <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes.</span>
             )}
-            {[...rosterBench].sort((a, b) => (Number(playerById(a).number) || 0) - (Number(playerById(b).number) || 0)).map((id) => {
+            {[...availableBench].sort((a, b) => (Number(playerById(a).number) || 0) - (Number(playerById(b).number) || 0)).map((id) => {
               const p = playerById(id);
               const wasSubbedOut = match.subs.some((s) => s.outId === id);
               return (
@@ -4286,7 +4544,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
                 Entra por <span className="font-semibold">{playerById(subOutId).name}</span>:
               </div>
               <div className="flex flex-wrap gap-2 mb-2">
-                {rosterBench.map((id) => {
+                {availableBench.map((id) => {
                   const p = playerById(id);
                   const wasSubbedOut = match.subs.some((s) => s.outId === id);
                   return (
@@ -4300,7 +4558,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
                     </button>
                   );
                 })}
-                {rosterBench.length === 0 && (
+                {availableBench.length === 0 && (
                   <span className="text-xs" style={{ color: "var(--chalk-dim)" }}>No hay suplentes disponibles.</span>
                 )}
               </div>
@@ -4803,8 +5061,10 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate, defaultFor
     </button>
   );
 
-  const rosterOnPitch = match.onPitch.filter((id) => squad.some((p) => p.id === id));
-  const rosterBench = match.bench.filter((id) => squad.some((p) => p.id === id));
+  // Los expulsados (roja en este partido) ya no se colocan ni entran en cambios
+  const sentOffIds = new Set((match.events || []).filter((e) => e.type === "roja").map((e) => e.playerId));
+  const rosterOnPitch = match.onPitch.filter((id) => squad.some((p) => p.id === id) && !sentOffIds.has(id));
+  const rosterBench = match.bench.filter((id) => squad.some((p) => p.id === id) && !sentOffIds.has(id));
 
   const placedIds = rosterOnPitch.filter((id) => positions[id]);
   const unplacedIds = rosterOnPitch.filter((id) => !positions[id]);
@@ -5847,8 +6107,16 @@ function computeMatchIntervals(match) {
     }
     open[s.inId] = s.minute;
   });
+  // Expulsados: su último tramo acaba en el minuto de la roja, no al final del partido
+  const redMinute = {};
+  (match.events || []).forEach((e) => {
+    if (e.type !== "roja") return;
+    const m = clampMinute(e.half, e.minute);
+    if (redMinute[e.playerId] == null || m < redMinute[e.playerId]) redMinute[e.playerId] = m;
+  });
   Object.keys(open).forEach((id) => {
-    (intervals[id] = intervals[id] || []).push({ enter: open[id], exit: Math.max(open[id], totalMinutes) });
+    const end = redMinute[id] != null && redMinute[id] >= open[id] ? Math.min(redMinute[id], totalMinutes) : totalMinutes;
+    (intervals[id] = intervals[id] || []).push({ enter: open[id], exit: Math.max(open[id], end) });
   });
   return intervals;
 }
@@ -7978,8 +8246,9 @@ function LiveSetPieceBoard({ match, squad, setPiecePositions, playerById, onUpda
 
   // Disponibles: los que están ahora en el campo (titulares que siguen + suplentes que han
   // entrado). Los desconvocados nunca están en el campo, así que quedan fuera.
+  const sentOffIds = new Set((match.events || []).filter((e) => e.type === "roja").map((e) => e.playerId));
   const available = (match.onPitch || [])
-    .filter((id) => squad.some((p) => p.id === id))
+    .filter((id) => squad.some((p) => p.id === id) && !sentOffIds.has(id))
     .sort((a, b) => Number(playerById(a).number) - Number(playerById(b).number));
 
   const assignments =
@@ -9701,6 +9970,8 @@ function App() {
   // Todo cambio se guarda primero en local y se apunta en la cola; la subida va aparte y,
   // sin conexión, simplemente espera.
   function commit(nextData, { syncNow = true } = {}) {
+    // Rojas y acumulación de amarillas nuevas → Sancionados (ver applySanctionTriggers)
+    nextData = applySanctionTriggers(nextData);
     const prev = dataRef.current;
     const stamped = { ...nextData, updatedAt: Math.max(Date.now(), (prev.updatedAt || 0) + 1) };
     setData(stamped);
@@ -9896,9 +10167,32 @@ function App() {
     setView("stats");
   }
 
-  function createMatch({ opponent, date, halfLength, titulares, desconvocados = {}, isHome }) {
+  // Los sancionados con partidos pendientes no se pueden convocar: salen del once y quedan como
+  // desconvocados con motivo "Sanción" (marcados para que no se puedan volver a convocar).
+  function withSanctionsApplied(titulares, desconvocados) {
+    const pending = pendingSanctionsByPlayer(dataRef.current);
+    const nextDesconv = { ...desconvocados };
+    dataRef.current.squad.forEach((p) => {
+      if (pending[p.id]) nextDesconv[p.id] = { reason: "sancion", other: "", sanctioned: true };
+    });
+    return { titulares: titulares.filter((id) => !pending[id]), desconvocados: nextDesconv };
+  }
+
+  function updateSanction(id, remaining) {
+    const n = Math.max(0, Math.min(99, Math.round(Number(remaining) || 0)));
+    const sanctions = (dataRef.current.sanctions || [])
+      .map((s) => (s.id === id ? { ...s, remaining: n } : s))
+      .filter((s) => s.remaining > 0);
+    commit({ ...dataRef.current, sanctions });
+  }
+
+  function createMatch({ opponent, date, halfLength, titulares: rawTitulares, desconvocados: rawDesconv = {}, isHome, competition = "liga" }) {
     const squad = dataRef.current.squad;
     const scheduled = date > todayISO();
+    // Un partido programado se revisa al empezarlo; si se juega ya, se aplican las sanciones ahora
+    const { titulares, desconvocados } = scheduled
+      ? { titulares: rawTitulares, desconvocados: rawDesconv }
+      : withSanctionsApplied(rawTitulares, rawDesconv);
     // Suplentes = el resto de la plantilla menos los desconvocados de este partido
     const bench = squad.filter((p) => !titulares.includes(p.id) && !desconvocados[p.id]).map((p) => p.id);
     const newMatch = {
@@ -9910,6 +10204,7 @@ function App() {
       finished: false,
       scheduled,
       isHome,
+      competition,
       clock: { half1Elapsed: 0, half2Elapsed: 0, running: false, activeHalf: 1, runStartedAt: null },
       onPitch: titulares,
       bench,
@@ -9925,7 +10220,7 @@ function App() {
     };
     const updatedList = [
       ...dataRef.current.matchesList,
-      { id: newMatch.id, opponent, date, finished: false, scheduled, isHome },
+      { id: newMatch.id, opponent, date, finished: false, scheduled, isHome, competition },
     ];
     commit({
       ...dataRef.current,
@@ -9941,8 +10236,9 @@ function App() {
     }
   }
 
-  function beginScheduledMatch(titulares, desconvocados = {}) {
+  function beginScheduledMatch(rawTitulares, rawDesconv = {}) {
     const squad = dataRef.current.squad;
+    const { titulares, desconvocados } = withSanctionsApplied(rawTitulares, rawDesconv);
     const bench = squad.filter((p) => !titulares.includes(p.id) && !desconvocados[p.id]).map((p) => p.id);
     const updated = {
       ...match,
@@ -10072,11 +10368,17 @@ function App() {
     const updatedList = dataRef.current.matchesList.map((m) =>
       m.id === updated.id ? { ...m, finished: true } : m
     );
-    commit({
-      ...dataRef.current,
-      matchesList: updatedList,
-      matchesById: { ...dataRef.current.matchesById, [updated.id]: updated },
-    });
+    // Partido de liga finalizado: un partido menos de sanción para cada sancionado
+    commit(
+      serveSanctions(
+        {
+          ...dataRef.current,
+          matchesList: updatedList,
+          matchesById: { ...dataRef.current.matchesById, [updated.id]: updated },
+        },
+        updated
+      )
+    );
     setView("summary");
   }
 
@@ -10193,6 +10495,8 @@ function App() {
         )}
         {view === "squad" && (
           <SquadManager
+            sanctions={data.sanctions || []}
+            onUpdateSanction={updateSanction}
             squad={data.squad}
             matches={Object.values(data.matchesById)}
             onSave={saveSquad}
@@ -10247,6 +10551,7 @@ function App() {
         )}
         {view === "setup" && (
           <MatchSetup
+            sanctioned={pendingSanctionsByPlayer(data)}
             defaultHalfLength={team.defaultHalfLength}
             teamFormation={team.defaultFormation}
             formationChosen={!!team.formationChosen}
@@ -10261,6 +10566,7 @@ function App() {
         )}
         {view === "scheduled" && match && (
           <ScheduledMatch
+            sanctioned={pendingSanctionsByPlayer(data)}
             match={match}
             squad={data.squad}
             crests={data.crests}
