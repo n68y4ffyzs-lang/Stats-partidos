@@ -1475,7 +1475,8 @@ function helpFaqSections(isOwner) {
           a: [
             "Cada jugador que ha jugado empieza con la nota base (6,0 si no la has cambiado) y cada acción suma o resta según la tabla de pesos y su posición: por ejemplo un gol, una asistencia o una parada suman, y una tarjeta o una falta restan.",
             "Con el partido finalizado y si ganáis, todos suman un bono: +0,5 por ganar, +1 más si ganáis por 5 o más goles y +1 más si no encajáis ningún gol. La nota queda entre 0 y 10, con un decimal.",
-            "La posición que cuenta es la que ocupaba en la Pizarra en cada momento o, si no se le colocó, la de Plantilla. En Plantilla ves la nota media de la temporada de cada jugador.",
+            "La posición que cuenta es la que ocupaba en la Pizarra en cada momento o, si no se le colocó, la de Plantilla. Quien entra de cambio hereda la posición del jugador al que sustituye desde el minuto del cambio. En Plantilla ves la nota media de la temporada de cada jugador.",
+            "Para comprobarlo, en las estadísticas del partido pulsa «Ver posiciones por tramos (para la nota)»: verás, por jugador, con qué posición puntúa en cada tramo de minutos y de dónde sale esa posición.",
           ],
         },
         {
@@ -4285,7 +4286,13 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
       inNumber: inP.number,
     };
     onUpdate(
-      { ...match, onPitch: newOnPitch, bench: newBench, subs: [...match.subs, subEntry] },
+      {
+        ...match,
+        onPitch: newOnPitch,
+        bench: newBench,
+        subs: [...match.subs, subEntry],
+        ...positionsAfterSub(match, outP.id, inP.id, half, minute, squad),
+      },
       true
     );
     setSubOutId(null);
@@ -4466,6 +4473,7 @@ function LiveMatch({ match, squad, crests, setPiecePositions, onSaveCrest, onUpd
               ratings={computeMatchRatings(match, squad, ratingConfig)}
             />
           )}
+          <PositionTimelineReview match={match} squad={squad} />
         </React.Fragment>
       )}
 
@@ -4770,6 +4778,7 @@ const RIVAL_FORMATIONS = [
   { id: "1-4-5-1", lines: [4, 5, 1] },
   { id: "1-4-4-1-1", lines: [4, 4, 1, 1] },
   { id: "1-3-5-2", lines: [3, 5, 2] },
+  { id: "1-3-4-2-1", lines: [3, 4, 2, 1] },
   { id: "1-3-4-3", lines: [3, 4, 3] },
   { id: "1-5-3-2", lines: [5, 3, 2] },
   { id: "1-5-4-1", lines: [5, 4, 1] },
@@ -4822,6 +4831,8 @@ const TEAM_FORMATION_LINES = {
   "1-4-5-1": [BACK_FOUR, ["CAI", "MC", "MC", "MC", "CAD"], ["DC"]],
   "1-4-4-1-1": [BACK_FOUR, ["CAI", "MC", "MC", "CAD"], ["SD"], ["DC"]],
   "1-3-4-3": [BACK_THREE, ["CAI", "MC", "MC", "CAD"], ["DC", "DC", "DC"]],
+  // 3 centrales, 2 carrileros, 2 mediocentros, 2 mediocentros ofensivos y 1 delantero
+  "1-3-4-2-1": [BACK_THREE, ["CAI", "MC", "MC", "CAD"], ["MCO", "MCO"], ["DC"]],
   "1-5-3-2": [BACK_FIVE, ["MC", "MCO", "MC"], ["DC", "DC"]],
   "1-5-4-1": [BACK_FIVE, ["MC", "MC", "MC", "MC"], ["DC"]],
 };
@@ -5152,21 +5163,14 @@ function FieldFormation({ match, squad, crests, playerById, onUpdate, defaultFor
       inName: inP.name,
       inNumber: inP.number,
     };
-    const nextPositions = { ...positions };
-    let nextHistory = match.positionHistory || [];
-    if (nextPositions[outId]) {
-      nextPositions[inId] = nextPositions[outId];
-      nextHistory = appendPositionHistory(nextHistory, inId, nextPositions[outId]);
-    }
-    delete nextPositions[outId];
+    // El que entra hereda el sitio y la posición exacta del que sale (no se deduce del dibujo)
     onUpdate(
       {
         ...match,
         onPitch: newOnPitch,
         bench: newBench,
         subs: [...match.subs, subEntry],
-        positions: nextPositions,
-        positionHistory: nextHistory,
+        ...positionsAfterSub(match, outId, inId, half, minute, squad),
       },
       true
     );
@@ -5912,6 +5916,7 @@ function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpda
               ratings={computeMatchRatings(match, squad, ratingConfig)}
             />
           )}
+          <PositionTimelineReview match={match} squad={squad} />
         </React.Fragment>
       )}
 
@@ -6370,6 +6375,114 @@ function positionAtMinute(match, playerId, half, minute, fallbackCode) {
     if (h.half < half || (h.half === half && h.minute <= minute)) current = h.code;
   });
   return current;
+}
+
+// Al hacer un cambio, el que entra ocupa el sitio del que sale en la Pizarra y hereda la
+// posición exacta que tenía el que sale en ese minuto (su tramo de posición, o su posición de
+// Plantilla si nunca se le colocó). Se abre un tramo nuevo para el que entra con el minuto exacto
+// del cambio. Devuelve { positions, positionHistory } para el partido.
+function positionsAfterSub(match, outId, inId, half, minute, squad) {
+  const outPlayer = (squad || []).find((p) => p.id === outId);
+  const code = positionAtMinute(match, outId, half, minute, outPlayer && outPlayer.position);
+  const positions = { ...(match.positions || {}) };
+  if (positions[outId]) positions[inId] = positions[outId];
+  delete positions[outId];
+  const positionHistory = code
+    ? [...(match.positionHistory || []), { id: genId(), playerId: inId, code, half, minute, via: "cambio" }]
+    : match.positionHistory || [];
+  return { positions, positionHistory };
+}
+
+// Tramos de posición de cada jugador en un partido, tal como los usa la nota: para cada tramo
+// en el campo (entrada → salida), los cambios de posición registrados dentro. `source`: de dónde
+// sale la posición (Pizarra, heredada en un cambio, o ficha de Plantilla si no hay ninguna).
+function positionSegments(match, squad) {
+  const L = Number(match.halfLength) || 45;
+  const halfOf = (m) => (m <= L ? 1 : 2);
+  const intervals = computeMatchIntervals(match);
+  const result = [];
+  Object.keys(intervals).forEach((playerId) => {
+    const player = (squad || []).find((p) => p.id === playerId);
+    if (!player) return;
+    const history = (match.positionHistory || [])
+      .filter((h) => h.playerId === playerId)
+      .sort((a, b) => a.half - b.half || a.minute - b.minute);
+    const entryAt = (minute) => {
+      let current = null;
+      history.forEach((h) => {
+        if (h.half < halfOf(minute) || (h.half === halfOf(minute) && h.minute <= minute)) current = h;
+      });
+      return current;
+    };
+    const describe = (entry) => {
+      if (!history.length) return { code: player.position || null, source: "ficha" };
+      if (!entry) return { code: history[0].code, source: "antes" }; // se aplica el primer tramo desde el inicio
+      return { code: entry.code, source: entry.via === "cambio" ? "cambio" : "pizarra" };
+    };
+    const segments = [];
+    intervals[playerId].forEach(({ enter, exit }) => {
+      let start = enter;
+      // Lo colocado dentro del primer minuto de su tramo (p. ej. antes de empezar, que se apunta
+      // como minuto 1) cuenta como colocado desde el inicio, no como aplicado hacia atrás
+      const early = history.find((h) => h.minute <= enter + 1);
+      let cur = describe(entryAt(enter) || (early && entryAt(enter + 1)) || null);
+      history
+        .filter((h) => h.minute > enter && h.minute < exit)
+        .forEach((h) => {
+          const next = describe(h);
+          if (next.code === cur.code && next.source === cur.source) return;
+          segments.push({ start, end: h.minute, ...cur });
+          start = h.minute;
+          cur = next;
+        });
+      segments.push({ start, end: exit, ...cur });
+    });
+    result.push({ player, segments });
+  });
+  return result.sort((a, b) => Number(a.player.number) - Number(b.player.number));
+}
+
+const POSITION_SOURCE_LABEL = {
+  pizarra: "Pizarra",
+  cambio: "heredada en el cambio",
+  ficha: "ficha de Plantilla (nunca colocado)",
+  antes: "Pizarra (aplicada desde antes de colocarlo)",
+};
+
+// Estadísticas del partido → revisión de los tramos de posición que usa la nota
+function PositionTimelineReview({ match, squad }) {
+  const [open, setOpen] = useState(false);
+  const dim = { color: "var(--chalk-dim)" };
+  const rows = open ? positionSegments(match, squad) : [];
+  return (
+    <div className="mt-2">
+      <button onClick={() => setOpen((v) => !v)} className="mp-btn mp-btn-outline w-full py-2.5 text-sm mb-2">
+        {open ? "Ocultar posiciones por tramos" : "Ver posiciones por tramos (para la nota)"}
+      </button>
+      {open && (
+        <div className="mp-card p-3 flex flex-col gap-2">
+          <div className="text-xs" style={dim}>
+            Posición con la que puntúa cada jugador en cada tramo del partido (minutos de entrada y salida).
+          </div>
+          {rows.length === 0 && <div className="text-sm" style={dim}>Aún no hay jugadores con minutos.</div>}
+          {rows.map(({ player, segments }) => (
+            <div key={player.id} className="text-sm">
+              <div className="font-semibold">#{player.number} {player.name}</div>
+              {segments.map((sg, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs ml-3">
+                  <span className="tabular-nums" style={{ minWidth: 64 }}>{sg.start}' – {sg.end}'</span>
+                  <span className="font-semibold" style={{ minWidth: 36 }}>{sg.code || "—"}</span>
+                  <span style={{ color: sg.source === "ficha" || sg.source === "antes" ? "var(--amber)" : "var(--chalk-dim)" }}>
+                    {POSITION_SOURCE_LABEL[sg.source]}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function matchGoals(match) {
