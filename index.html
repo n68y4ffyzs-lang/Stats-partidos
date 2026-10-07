@@ -1468,7 +1468,7 @@ function helpFaqSections(isOwner) {
           q: "¿Cómo veo o exporto las estadísticas del partido (PDF/Excel)?",
           a: [
             "Al pulsar «Finalizar partido» se abre su resumen (después, desde Partidos, tocando el partido). Tiene las pestañas Resumen, Estadísticas, Gráficos y Notas.",
-            "En la pestaña Resumen: «Descargar CSV del partido» genera un archivo CSV con todos los eventos, que se abre con Excel o Numbers. En el recuadro «Informe PDF con estadísticas y nota» puedes sacar el «PDF de todo el equipo» o uno por jugador; en iPad se abre el menú de compartir para mandarlo.",
+            "En la pestaña Resumen: «Descargar CSV del partido» genera un archivo CSV con todos los eventos, que se abre con Excel o Numbers. «Descargar PDF del partido» saca un informe para repartir, sin notas: resultado y, por cada jugador que jugó, sus minutos y sus acciones. En el recuadro «Informe PDF con estadísticas y nota» puedes sacar el «PDF de todo el equipo» o uno por jugador; en iPad se abre el menú de compartir para mandarlo.",
           ],
         },
         {
@@ -6204,6 +6204,8 @@ function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpda
             </button>
           )}
 
+          <MatchPlainPdfButton match={match} squad={squad} crests={crests} teamName={teamName} />
+
           <MatchPdfPanel match={match} squad={squad} crests={crests} teamName={teamName} />
 
           {onUpdate && (match.events || []).length > 0 && <EditMatchEvents match={match} onUpdate={onUpdate} />}
@@ -7098,6 +7100,197 @@ async function shareOrDownloadPdf(doc, filename) {
     }
   }
   doc.save(filename);
+}
+
+/* ---------------------------------------------------------
+   PDF del partido sin notas: para repartir (jugadores, familias, club). Cabecera con los dos
+   escudos y el resultado, y una tabla por jugador que jugó con sus minutos y lo que registró.
+   No lleva nada de la nota (ni bonos ni orden por nota): jugadores por posición y dorsal.
+--------------------------------------------------------- */
+function pdfFileNamePart(text) {
+  return String(text || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function formatDateES(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso || "";
+}
+
+function buildMatchPlainPdf(match, squad, crests, teamName) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const INK = [33, 37, 41];
+  const DIM = [110, 117, 125];
+  const LINE = [206, 212, 218];
+  const HEAD = [52, 58, 64];
+  const ZEBRA = [246, 247, 249];
+  const minutes = computeMatchMinutes(match);
+  const { favor, contra } = matchGoals(match);
+  const ownName = teamName || "Mi equipo";
+
+  // Solo PNG/JPEG: son los formatos que jsPDF mete sin más
+  function crestImage(src) {
+    if (!src || !/^data:image\/(png|jpe?g)/i.test(src)) return null;
+    try {
+      const props = doc.getImageProperties(src);
+      return { src, format: /^data:image\/png/i.test(src) ? "PNG" : "JPEG", ratio: props.width / props.height };
+    } catch (e) {
+      return null;
+    }
+  }
+  function drawCrest(img, cx, y, h) {
+    if (!img) return;
+    const w = Math.min(h * img.ratio, h * 1.5);
+    const hh = w / img.ratio;
+    doc.addImage(img.src, img.format, cx - w / 2, y + (h - hh) / 2, w, hh);
+  }
+
+  // Cabecera: el equipo local a la izquierda, como en un marcador
+  const own = { name: ownName, crest: crests && crests.own, goals: favor };
+  const rival = { name: match.opponent, crest: rivalCrest(crests, match.opponent), goals: contra };
+  const [left, right] = match.isHome === false ? [rival, own] : [own, rival];
+
+  doc.setTextColor(...DIM);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text("INFORME DEL PARTIDO", 105, 12, { align: "center" });
+  drawCrest(crestImage(left.crest), 42, 17, 22);
+  drawCrest(crestImage(right.crest), 168, 17, 22);
+  doc.setTextColor(...INK);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text(doc.splitTextToSize(pdfSafe(left.name), 64), 42, 46, { align: "center" });
+  doc.text(doc.splitTextToSize(pdfSafe(right.name), 64), 168, 46, { align: "center" });
+  doc.setFontSize(30);
+  doc.text(`${left.goals} - ${right.goals}`, 105, 33, { align: "center" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(...DIM);
+  const meta = [
+    formatDateES(match.date),
+    match.competition === "amistoso" ? "Amistoso" : "Liga",
+    match.isHome === true ? "Local" : match.isHome === false ? "Visitante" : null,
+  ].filter(Boolean);
+  doc.text(pdfSafe(meta.join("  ·  ")), 105, 58, { align: "center" });
+  doc.setDrawColor(...LINE);
+  doc.setLineWidth(0.3);
+  doc.line(14, 63, 196, 63);
+
+  // Jugadores: los que tuvieron minutos (o alguna acción), por posición y después por dorsal
+  const posOrder = (p) => {
+    const i = PLAYER_POSITIONS.findIndex((x) => x.value === p.position);
+    return i === -1 ? PLAYER_POSITIONS.length : i;
+  };
+  const roster = [...new Set([...(match.onPitch || []), ...(match.bench || [])])]
+    .map((id) => squad.find((p) => p.id === id))
+    .filter(Boolean)
+    .sort((a, b) => posOrder(a) - posOrder(b) || (Number(a.number) || 0) - (Number(b.number) || 0));
+  const events = match.events || [];
+  const played = roster.filter((p) => (minutes[p.id] || 0) > 0 || events.some((e) => e.playerId === p.id));
+  const unused = roster.filter((p) => !played.includes(p));
+
+  doc.setTextColor(...INK);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.text(`Jugadores (${played.length})`, 14, 71);
+  let y = 75;
+
+  played.forEach((p) => {
+    const counts = EVENT_TYPES.map((ev) => [pdfSafe(ev.label), events.filter((e) => e.playerId === p.id && e.type === ev.id).length])
+      .filter(([, n]) => n > 0);
+    // Dos acciones por fila para que cada jugador ocupe poco
+    const body = [];
+    for (let i = 0; i < counts.length; i += 2) {
+      const [a, b] = [counts[i], counts[i + 1] || ["", ""]];
+      body.push([a[0], a[1], b[0], b[1]]);
+    }
+    const position = p.position ? PLAYER_POSITION_LABEL[p.position] || p.position : "Sin posición";
+    doc.autoTable({
+      startY: y,
+      head: [[
+        { content: pdfSafe(`#${p.number}  ${p.name}`), colSpan: 2, styles: { halign: "left" } },
+        { content: pdfSafe(`${position} · ${minutes[p.id] || 0} min`), colSpan: 2, styles: { halign: "right", fontStyle: "normal" } },
+      ]],
+      body: body.length ? body : [[{ content: "Sin acciones registradas", colSpan: 4, styles: { textColor: DIM } }]],
+      theme: "grid",
+      pageBreak: "avoid",
+      headStyles: { fillColor: HEAD, textColor: 255, fontSize: 10 },
+      styles: { fontSize: 9, textColor: INK, lineColor: LINE, lineWidth: 0.1, cellPadding: 1.8 },
+      alternateRowStyles: { fillColor: ZEBRA },
+      // Anchos fijos: así todas las tablas de jugadores quedan alineadas
+      columnStyles: {
+        0: { cellWidth: 77 },
+        1: { halign: "right", cellWidth: 14, fontStyle: "bold" },
+        2: { cellWidth: 77 },
+        3: { halign: "right", cellWidth: 14, fontStyle: "bold" },
+      },
+      margin: { left: 14, right: 14, top: 14, bottom: 16 },
+    });
+    y = doc.lastAutoTable.finalY + 5;
+  });
+
+  // Convocados sin minutos y desconvocados, solo con el nombre
+  const uncalled = Object.keys(match.desconvocados || {})
+    .map((id) => squad.find((p) => p.id === id))
+    .filter(Boolean)
+    .sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0));
+  [
+    ["Convocados sin minutos", unused],
+    ["Desconvocados", uncalled],
+  ].forEach(([label, list]) => {
+    if (!list.length) return;
+    const lines = doc.splitTextToSize(pdfSafe(`${label}: ${list.map((p) => `#${p.number} ${p.name}`).join(", ")}`), 182);
+    if (y + lines.length * 5 > 280) {
+      doc.addPage();
+      y = 18;
+    }
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(...DIM);
+    doc.text(lines, 14, y + 2);
+    y += lines.length * 5 + 2;
+  });
+
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(140, 140, 140);
+    doc.text(pdfSafe(`Statix · ${ownName} vs ${match.opponent}`), 14, 290);
+    doc.text(`${i}/${pages}`, 196, 290, { align: "right" });
+  }
+
+  const filename = `Statix_${pdfFileNamePart(ownName) || "Equipo"}_vs_${pdfFileNamePart(match.opponent) || "Rival"}_${pdfFileNamePart(match.date)}.pdf`;
+  return { doc, filename };
+}
+
+function MatchPlainPdfButton({ match, squad, crests, teamName }) {
+  const [busy, setBusy] = useState(false);
+
+  async function generate() {
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+      window.alert("No se ha podido cargar el generador de PDF. Abre la app una vez con conexión y vuelve a probar.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { doc, filename } = buildMatchPlainPdf(match, squad, crests, teamName);
+      await shareOrDownloadPdf(doc, filename);
+    } catch (e) {
+      console.error("Error generando el PDF", e);
+      window.alert("No se pudo generar el PDF.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button onClick={generate} disabled={busy} className="mp-btn mp-btn-outline w-full py-3 font-semibold mb-5 disabled:opacity-40">
+      {busy ? "Generando PDF…" : "Descargar PDF del partido"}
+    </button>
+  );
 }
 
 // Partido ya finalizado: quitar cualquier evento registrado por error (en directo o añadido
