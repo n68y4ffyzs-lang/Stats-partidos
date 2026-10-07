@@ -1448,6 +1448,7 @@ function helpFaqSections(isOwner) {
             "Sí. Durante el partido, en la pestaña «Jugadores y equipo» pulsa «Ver cronología» y toca «Deshacer» en el evento equivocado; después regístralo bien. Los eventos de equipo (córners, ataques por banda) tienen su propio «Deshacer» debajo de cada contador.",
             "Un cambio también se puede deshacer desde la cronología: el que entró vuelve al banquillo y el que salió vuelve al campo. Si alguno de los dos participó después en otro cambio, primero hay que deshacer ese.",
             "Con el partido ya finalizado, en su resumen (pestaña Resumen) tienes «Corregir eventos registrados» para quitar cualquier evento, «Añadir acciones olvidadas» para añadir lo que faltó y «Corregir minutos de los cambios».",
+            "Para repasar el partido entero viendo el vídeo, pulsa «Repetir partido»: se abre la pantalla de eventos con su propio cronómetro (ponlo en marcha, páusalo o escribe el minuto a mano) y cada evento se apunta en el minuto que marque. Si ya había uno igual en ese minuto (mismo jugador y tipo, o mismo evento de equipo), te pregunta antes de añadirlo.",
           ],
         },
         {
@@ -5669,11 +5670,20 @@ function TeamEventCounter({ label, value, onAdd, onUndo }) {
   );
 }
 
-function OpponentChanceMarker({ match, onUpdate }) {
+// Mensaje común al registrar algo que ya está apuntado en ese mismo minuto (Repetir partido)
+function confirmDuplicateAt(minute) {
+  return window.confirm(`Ya existe un evento igual en el minuto ${minute}', ¿quieres añadirlo de todas formas?`);
+}
+
+// `at` (opcional) da la parte y el minuto en que se apunta; por defecto, el cronómetro del partido.
+// Con `checkDuplicates`, si ya hay algo igual en ese minuto se pregunta antes de añadirlo.
+function OpponentChanceMarker({ match, onUpdate, at, checkDuplicates = false }) {
   const opponentChances = match.opponentChances || [];
 
   function addOpponentChance() {
-    const entry = { id: genId(), half: match.clock.activeHalf, minute: computeMinute(match) };
+    const { half, minute } = at ? at() : { half: match.clock.activeHalf, minute: computeMinute(match) };
+    if (checkDuplicates && opponentChances.some((e) => e.minute === minute) && !confirmDuplicateAt(minute)) return;
+    const entry = { id: genId(), half, minute };
     onUpdate({ ...match, opponentChances: [...opponentChances, entry] }, true);
   }
   function removeOpponentChance(id) {
@@ -5707,14 +5717,16 @@ function OpponentChanceMarker({ match, onUpdate }) {
   );
 }
 
-function TeamEventsPanel({ match, onUpdate }) {
+function TeamEventsPanel({ match, onUpdate, at, checkDuplicates = false }) {
   const teamEvents = match.teamEvents || [];
 
   function countOf(typeId) {
     return teamEvents.filter((e) => e.type === typeId).length;
   }
   function addTeamEvent(typeId) {
-    const entry = { id: genId(), type: typeId, half: match.clock.activeHalf, minute: computeMinute(match) };
+    const { half, minute } = at ? at() : { half: match.clock.activeHalf, minute: computeMinute(match) };
+    if (checkDuplicates && teamEvents.some((e) => e.type === typeId && e.minute === minute) && !confirmDuplicateAt(minute)) return;
+    const entry = { id: genId(), type: typeId, half, minute };
     onUpdate({ ...match, teamEvents: [...teamEvents, entry] }, true);
   }
   function undoLastTeamEvent(typeId) {
@@ -5747,9 +5759,358 @@ function TeamEventsPanel({ match, onUpdate }) {
 }
 
 /* ---------------------------------------------------------
+   Pantalla: Repetir partido. Con el partido ya finalizado, la misma botonera de eventos del
+   directo pero con un cronómetro propio (no toca el del partido) para ir viendo el vídeo:
+   cada evento se apunta en el minuto que marque, igual que en directo. Si ya hay uno igual en
+   ese minuto, pregunta antes. El cronómetro se recuerda en este dispositivo por partido.
+--------------------------------------------------------- */
+// Quién estaba en el campo en un momento dado: se deshacen los cambios desde la alineación
+// final para sacar el once inicial y se aplican los hechos hasta ese minuto (sin expulsados).
+function lineupAtMinute(match, half, minute) {
+  const at = (h, m) => h * 1000 + m;
+  const subs = (match.subs || []).map((s, i) => ({ ...s, i })).sort((a, b) => at(a.half, a.minute) - at(b.half, b.minute) || a.i - b.i);
+  let onPitch = [...(match.onPitch || [])];
+  [...subs].reverse().forEach((s) => { onPitch = onPitch.map((x) => (x === s.inId ? s.outId : x)); });
+  subs.filter((s) => at(s.half, s.minute) <= at(half, minute)).forEach((s) => {
+    onPitch = onPitch.map((x) => (x === s.outId ? s.inId : x));
+  });
+  const sentOff = new Set(
+    (match.events || []).filter((e) => e.type === "roja" && at(e.half, e.minute) <= at(half, minute)).map((e) => e.playerId)
+  );
+  return onPitch.filter((id) => !sentOff.has(id));
+}
+
+function ReplayMatch({ match, squad, crests, onUpdate, onBack }) {
+  const L = Number(match.halfLength) || 45;
+  const storageKey = `replayClock:${match.id}`;
+  const [clock, setClock] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey));
+      if (saved && (saved.half === 1 || saved.half === 2)) return { half: saved.half, base: Number(saved.base) || 0, running: false, startedAt: null };
+    } catch (err) {
+      /* sin almacenamiento: se empieza desde 0 */
+    }
+    return { half: 1, base: 0, running: false, startedAt: null };
+  });
+  const [selectedPlayerId, setSelectedPlayerId] = useState(null);
+  const [pendingDetail, setPendingDetail] = useState(null);
+  const [editing, setEditing] = useState(null); // { half, min, sec } mientras se escribe el tiempo a mano
+  const [, forceTick] = useState(0);
+
+  // Lo que ya estaba apuntado al abrir la pantalla: el resto es lo añadido en esta repetición
+  const initialIdsRef = useRef(null);
+  if (!initialIdsRef.current) {
+    initialIdsRef.current = new Set(
+      [...(match.events || []), ...(match.teamEvents || []), ...(match.opponentChances || [])].map((e) => e.id)
+    );
+  }
+
+  useEffect(() => {
+    if (!clock.running) return;
+    const interval = setInterval(() => forceTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [clock.running]);
+
+  function elapsedOf(c) {
+    return c.running ? c.base + Math.floor((Date.now() - c.startedAt) / 1000) : c.base;
+  }
+  const elapsed = elapsedOf(clock);
+
+  // El estado más reciente del cronómetro, para leerlo justo al tocar un botón y al salir
+  const clockRef = useRef(clock);
+  clockRef.current = clock;
+
+  function rememberClock(c) {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ half: c.half, base: elapsedOf(c) }));
+    } catch (err) {
+      /* sin almacenamiento: solo se pierde recordar el minuto */
+    }
+  }
+  function saveClock(c) {
+    setClock(c);
+    rememberClock(c);
+  }
+  // Al salir se guarda dónde iba, para seguir otro día por el mismo sitio
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => rememberClock(clockRef.current), []);
+
+  function toggleRunning() {
+    if (clock.running) saveClock({ ...clock, base: elapsed, running: false, startedAt: null });
+    else saveClock({ ...clock, running: true, startedAt: Date.now() });
+  }
+  function shift(delta) {
+    const base = Math.max(0, elapsed + delta);
+    saveClock({ ...clock, base, startedAt: clock.running ? Date.now() : null });
+  }
+  function switchHalf() {
+    saveClock({ half: clock.half === 1 ? 2 : 1, base: 0, running: false, startedAt: null });
+  }
+  function startEditing() {
+    setEditing({ half: clock.half, min: Math.floor(elapsed / 60), sec: elapsed % 60 });
+  }
+  function applyEditing() {
+    const base = Math.max(0, (Number(editing.min) || 0) * 60 + Math.min(Math.max(Number(editing.sec) || 0, 0), 59));
+    saveClock({ half: editing.half, base, running: false, startedAt: null });
+    setEditing(null);
+  }
+
+  // Mismo cálculo que en directo: el minuto no pasa de la duración de la parte
+  function currentAt() {
+    const c = clockRef.current;
+    const secs = elapsedOf(c);
+    const inHalf = Math.min(Math.floor(secs / 60) + 1, L);
+    return { half: c.half, seconds: Math.min(secs, L * 60), minute: c.half === 1 ? inHalf : L + inHalf };
+  }
+  const now = currentAt();
+
+  const playerById = (id) => squad.find((p) => p.id === id) || { id, number: "?", name: "Desconocido" };
+  const rosterIds = [...new Set([...(match.onPitch || []), ...(match.bench || [])])].filter((id) => squad.some((p) => p.id === id));
+  const byNumber = (a, b) => (Number(playerById(a).number) || 0) - (Number(playerById(b).number) || 0);
+  const onPitchNow = lineupAtMinute(match, now.half, now.minute).filter((id) => rosterIds.includes(id));
+  const others = rosterIds.filter((id) => !onPitchNow.includes(id)).sort(byNumber);
+
+  function addPlayerEvent(playerId, type, extra = {}) {
+    const p = playerById(playerId);
+    const { half, seconds, minute } = currentAt();
+    const dup = (match.events || []).some((e) => e.playerId === p.id && e.type === type && e.minute === minute);
+    if (dup && !confirmDuplicateAt(minute)) return;
+    const entry = { id: genId(), half, seconds, minute, playerId: p.id, playerNumber: p.number, playerName: p.name, type, ...extra };
+    onUpdate({ ...match, events: [...(match.events || []), entry] }, true);
+  }
+
+  function addEvent(typeId) {
+    if (!selectedPlayerId) return;
+    if (EVENTS_WITH_DETAIL[typeId]) {
+      setPendingDetail({ typeId, playerId: selectedPlayerId });
+      return;
+    }
+    addPlayerEvent(selectedPlayerId, typeId);
+  }
+
+  function confirmDetail(value) {
+    if (!pendingDetail) return;
+    const { typeId, playerId } = pendingDetail;
+    const meta = EVENTS_WITH_DETAIL[typeId];
+    if (meta.field === "__type__") addPlayerEvent(playerId, value);
+    else addPlayerEvent(playerId, typeId, { [meta.field]: value });
+    setPendingDetail(null);
+  }
+
+  const selectedPlayer = selectedPlayerId ? playerById(selectedPlayerId) : null;
+  const isGoalkeeperSelected = isGoalkeeper(selectedPlayer);
+  const liveEventSections = LIVE_EVENT_SECTIONS.map((section) => ({
+    title: section.title,
+    events: section.ids.map((id) => EVENT_TYPES.find((ev) => ev.id === id)).filter(Boolean),
+  })).filter((section) => section.title !== "Portero" || isGoalkeeperSelected);
+
+  const added = [
+    ...(match.events || []).map((e) => ({
+      ...e,
+      kind: "events",
+      cls: eventChipCls(e.type),
+      text: `#${e.playerNumber} ${e.playerName} — ${EVENT_LABEL[e.type] || e.type}${eventDetailLabel(e) ? ` (${eventDetailLabel(e)})` : ""}`,
+    })),
+    ...(match.teamEvents || []).map((e) => ({
+      ...e,
+      kind: "teamEvents",
+      cls: "",
+      text: `Equipo — ${(TEAM_EVENT_TYPES.find((t) => t.id === e.type) || {}).label || e.type}`,
+    })),
+    ...(match.opponentChances || []).map((e) => ({ ...e, kind: "opponentChances", cls: "", text: "Ocasión del rival" })),
+  ]
+    .filter((e) => !initialIdsRef.current.has(e.id))
+    .sort((a, b) => b.half - a.half || b.minute - a.minute || (b.id > a.id ? 1 : -1));
+
+  function removeAdded(kind, id) {
+    onUpdate({ ...match, [kind]: (match[kind] || []).filter((e) => e.id !== id) }, true);
+  }
+
+  const golesFavor = (match.events || []).filter((e) => ALL_GOAL_TYPES.includes(e.type)).length;
+  const golesContra =
+    (match.concededSetPieces || []).length + (match.events || []).filter((e) => e.type === "gol_encajado").length;
+
+  function playerRow(id) {
+    const p = playerById(id);
+    const selected = selectedPlayerId === id;
+    return (
+      <button
+        key={id}
+        onClick={() => setSelectedPlayerId(selected ? null : id)}
+        className="mp-card flex items-center gap-2 px-2 py-1.5 text-left"
+        style={selected ? { borderColor: "var(--cielo)" } : {}}
+      >
+        <span className={`mp-shirt w-9 h-9 text-sm font-semibold shrink-0 ${selected ? "selected" : ""}`}>{p.number}</span>
+        <span className="flex-1 min-w-0 text-sm truncate">{p.name}</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto p-3 pb-8">
+      <div className="text-center pt-1 mb-1">
+        <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--chalk-dim)" }}>Resultado</div>
+        <ScoreWithCrests match={match} favor={golesFavor} contra={golesContra} crests={crests} />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pt-2">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">Volver</button>
+          <div>
+            <div className="font-semibold leading-tight">Repetir partido · vs {match.opponent}</div>
+            <div className="text-xs" style={{ color: "var(--chalk-dim)" }}>{match.date}</div>
+          </div>
+        </div>
+
+        <div className="mp-card px-4 py-2 flex flex-wrap items-center gap-3">
+          <div>
+            <div className="text-[10px]" style={{ color: "var(--chalk-dim)" }}>
+              {clock.half === 1 ? "1ª parte" : "2ª parte"} · min. {now.minute}'
+            </div>
+            <div className="display text-2xl font-semibold tabular-nums leading-none">{formatClock(elapsed)}</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={toggleRunning} className="mp-btn mp-btn-primary px-3 py-2 text-xs font-semibold">
+              {clock.running ? "Pausar" : elapsed > 0 ? "Reanudar" : "Poner en marcha"}
+            </button>
+            <button onClick={() => shift(-10)} className="mp-btn mp-btn-outline px-2 py-2 text-xs">−10s</button>
+            <button onClick={() => shift(10)} className="mp-btn mp-btn-outline px-2 py-2 text-xs">+10s</button>
+            <button onClick={() => shift(-60)} className="mp-btn mp-btn-outline px-2 py-2 text-xs">−1'</button>
+            <button onClick={() => shift(60)} className="mp-btn mp-btn-outline px-2 py-2 text-xs">+1'</button>
+            <button onClick={switchHalf} className="mp-btn mp-btn-outline px-3 py-2 text-xs">
+              {clock.half === 1 ? "Ir a 2ª parte" : "Ir a 1ª parte"}
+            </button>
+            <button onClick={startEditing} className="mp-btn mp-btn-outline px-3 py-2 text-xs">Ajustar tiempo</button>
+          </div>
+        </div>
+      </div>
+
+      {editing && (
+        <div className="mp-card p-3 mb-3" style={{ borderColor: "var(--amber)" }}>
+          <div className="text-sm mb-2">Tiempo del cronómetro, contado desde el inicio de la parte</div>
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            <select
+              value={editing.half}
+              onChange={(e) => setEditing({ ...editing, half: Number(e.target.value) })}
+              className="mp-input px-2 py-2 text-sm"
+            >
+              <option value={1}>1ª parte</option>
+              <option value={2}>2ª parte</option>
+            </select>
+            <label className="flex items-center gap-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+              Min.
+              <input type="number" min={0} value={editing.min}
+                onChange={(e) => setEditing({ ...editing, min: e.target.value })} className="mp-input w-20 px-2 py-2 text-sm" />
+            </label>
+            <label className="flex items-center gap-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+              Seg.
+              <input type="number" min={0} max={59} value={editing.sec}
+                onChange={(e) => setEditing({ ...editing, sec: e.target.value })} className="mp-input w-20 px-2 py-2 text-sm" />
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={applyEditing} className="mp-btn mp-btn-primary px-3 py-2 text-sm font-semibold">Aplicar</button>
+            <button onClick={() => setEditing(null)} className="mp-btn mp-btn-outline px-3 py-2 text-sm">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <OpponentChanceMarker match={match} onUpdate={onUpdate} at={currentAt} checkDuplicates />
+
+      <div className="lg:grid lg:grid-cols-[260px_1fr_280px] lg:gap-4 lg:items-start">
+        <div className="mb-4 lg:mb-0">
+          <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+            En el campo en el minuto {now.minute}' — toca para seleccionar
+          </div>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-1 lg:gap-1.5">{onPitchNow.map(playerRow)}</div>
+          {others.length > 0 && (
+            <React.Fragment>
+              <div className="mt-3 mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Resto de convocados</div>
+              <div className="grid grid-cols-2 gap-2 lg:grid-cols-1 lg:gap-1.5">{others.map(playerRow)}</div>
+            </React.Fragment>
+          )}
+        </div>
+
+        <div>
+          {pendingDetail && (
+            <div className="mp-card p-3 mb-3" style={{ borderColor: "var(--amber)" }}>
+              <div className="text-sm mb-2">
+                {EVENTS_WITH_DETAIL[pendingDetail.typeId].prompt} — {playerById(pendingDetail.playerId).name}
+              </div>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {EVENTS_WITH_DETAIL[pendingDetail.typeId].options.map((opt) => (
+                  <button key={opt.value} onClick={() => confirmDetail(opt.value)} className="mp-btn px-3 py-2 text-sm">
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setPendingDetail(null)} className="text-xs" style={{ color: "var(--chalk-dim)" }}>
+                Cancelar
+              </button>
+            </div>
+          )}
+
+          <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>
+            {selectedPlayerId
+              ? `Evento para ${playerById(selectedPlayerId).name}${isGoalkeeperSelected ? " (portero)" : ""} — se apunta en el ${now.minute}'`
+              : "Selecciona un jugador para registrar un evento"}
+          </div>
+          <div className="mb-5 flex flex-col gap-3">
+            {liveEventSections.map((section) => (
+              <div key={section.title}>
+                <div className="text-xs uppercase tracking-wide mb-1.5 font-semibold" style={{ color: "var(--chalk-dim)" }}>
+                  {section.title}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {section.events.map((ev) => (
+                    <button
+                      key={ev.id}
+                      disabled={!selectedPlayerId}
+                      onClick={() => addEvent(ev.id)}
+                      className={`mp-card ${eventChipCls(ev.id)} px-3 py-3 text-sm font-semibold leading-tight disabled:opacity-30`}
+                    >
+                      {ev.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-4 lg:mt-0">
+          <div className="mb-1 text-xs" style={{ color: "var(--chalk-dim)" }}>Eventos de equipo</div>
+          <TeamEventsPanel match={match} onUpdate={onUpdate} at={currentAt} checkDuplicates />
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="text-xs mb-2" style={{ color: "var(--chalk-dim)" }}>Añadido en esta repetición ({added.length})</div>
+        {added.length === 0 && (
+          <div className="text-sm" style={{ color: "var(--chalk-dim)" }}>Aún no has añadido nada.</div>
+        )}
+        <div className="flex flex-col gap-2">
+          {added.map((t) => (
+            <div key={t.id} className={`mp-card ${t.cls} p-2.5 flex items-center justify-between`}>
+              <span className="text-sm">
+                <span style={{ color: "var(--chalk-dim)" }}>{t.minute}' · </span>
+                {t.text}
+              </span>
+              <button onClick={() => removeAdded(t.kind, t.id)} className="text-xs" style={{ color: "var(--crimson)" }}>
+                Deshacer
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    Pantalla: Resumen
 --------------------------------------------------------- */
-function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpdate }) {
+function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpdate, onReplay }) {
   const ratingConfig = React.useContext(RatingConfigContext);
   const [tab, setTab] = useState("resumen");
   const [showPlayerStats, setShowPlayerStats] = useState(false);
@@ -5836,6 +6197,12 @@ function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpda
           >
             Descargar CSV del partido
           </button>
+
+          {onReplay && (
+            <button onClick={onReplay} className="mp-btn mp-btn-outline w-full py-3 font-semibold mb-5">
+              Repetir partido (revisar con cronómetro)
+            </button>
+          )}
 
           <MatchPdfPanel match={match} squad={squad} crests={crests} teamName={teamName} />
 
@@ -10707,7 +11074,10 @@ function App() {
           />
         )}
         {view === "summary" && match && (
-          <MatchSummary match={match} squad={data.squad} crests={data.crests} teamName={team.name} onBack={goHome} onExport={exportCSV} onUpdate={updateMatch} />
+          <MatchSummary match={match} squad={data.squad} crests={data.crests} teamName={team.name} onBack={goHome} onExport={exportCSV} onUpdate={updateMatch} onReplay={() => setView("replay")} />
+        )}
+        {view === "replay" && match && (
+          <ReplayMatch match={match} squad={data.squad} crests={data.crests} onUpdate={updateMatch} onBack={() => setView("summary")} />
         )}
         {view === "season" && (
           <SeasonStats
