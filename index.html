@@ -126,6 +126,21 @@ function isGoalkeeper(player) {
 const SET_PIECE_GOAL_TYPES = ["gol_corner", "gol_falta", "gol_penalti"];
 const ALL_GOAL_TYPES = ["gol", ...SET_PIECE_GOAL_TYPES];
 
+// En las estadísticas, cada gol cuenta también como remate a puerta de quien lo marca. Es un
+// cálculo al mostrar: no se guarda ningún evento, así que vale igual para partidos antiguos.
+// La nota NO lo usa (recorre los eventos guardados): el gol suma solo su peso de gol.
+// `counts` = { tipo: veces }; devuelve una copia con los remates a puerta ya sumados.
+function withGoalsAsShots(counts) {
+  const goals = ALL_GOAL_TYPES.reduce((sum, t) => sum + (counts[t] || 0), 0);
+  return goals ? { ...counts, remate_puerta: (counts.remate_puerta || 0) + goals } : counts;
+}
+
+function countEventTypes(events) {
+  const counts = {};
+  events.forEach((e) => { counts[e.type] = (counts[e.type] || 0) + 1; });
+  return counts;
+}
+
 // Grupos de eventos pensados para jugadores de campo (se ocultan en las estadísticas de los porteros)
 const FIELD_PLAYER_GROUPS = ["ataque", "posesion", "defensa"];
 
@@ -6123,6 +6138,7 @@ function MatchSummary({ match, squad, crests, teamName, onBack, onExport, onUpda
     }
     stats[e.playerId].counts[e.type] = (stats[e.playerId].counts[e.type] || 0) + 1;
   });
+  Object.values(stats).forEach((r) => { r.counts = withGoalsAsShots(r.counts); });
   const rows = Object.values(stats).sort((a, b) => Number(a.number) - Number(b.number));
   const usedTypes = EVENT_TYPES.filter((ev) => rows.some((r) => r.counts[ev.id]));
 
@@ -6334,10 +6350,7 @@ function StatCard({ label, value, sub }) {
 }
 
 function MatchTotals({ events, teamEvents = [] }) {
-  const totals = {};
-  events.forEach((e) => {
-    totals[e.type] = (totals[e.type] || 0) + 1;
-  });
+  const totals = withGoalsAsShots(countEventTypes(events));
   const teamCount = (type) => teamEvents.filter((e) => e.type === type).length;
 
   const faltasEnContra = totals["falta_cometida"] || 0;
@@ -6402,7 +6415,8 @@ function SeasonTeamStats({ matches }) {
   if (n === 0) return null;
 
   const allEvents = played.flatMap((m) => m.events);
-  const count = (type) => allEvents.filter((e) => e.type === type).length;
+  const allCounts = withGoalsAsShots(countEventTypes(allEvents));
+  const count = (type) => allCounts[type] || 0;
   const teamEventCount = (type) =>
     played.reduce((sum, m) => sum + (m.teamEvents || []).filter((e) => e.type === type).length, 0);
 
@@ -6551,7 +6565,8 @@ function computeSeasonHighlights(matches, squad) {
 
 function computePlayerStats(playerId, events) {
   const own = events.filter((e) => e.playerId === playerId);
-  const count = (type) => own.filter((e) => e.type === type).length;
+  const counts = withGoalsAsShots(countEventTypes(own));
+  const count = (type) => counts[type] || 0;
   const duelosGanados = count("duelo_ganado") + count("duelo_general_ganado");
   const duelosPerdidos = count("duelo_perdido") + count("duelo_general_perdido");
   const duelosTotales = duelosGanados + duelosPerdidos;
@@ -7023,8 +7038,8 @@ function buildMatchReportPdf(match, squad, ratingConfig, onlyPlayerId, ownCrest,
     });
 
     // Detalle: cada acción registrada, agrupada como en la app
-    const own = (match.events || []).filter((e) => e.playerId === p.id);
-    const detail = EVENT_TYPES.map((ev) => [ev, own.filter((e) => e.type === ev.id).length])
+    const ownCounts = withGoalsAsShots(countEventTypes((match.events || []).filter((e) => e.playerId === p.id)));
+    const detail = EVENT_TYPES.map((ev) => [ev, ownCounts[ev.id] || 0])
       .filter(([, n]) => n > 0)
       .map(([ev, n]) => [pdfSafe((GROUP_META[ev.group] || {}).label || ""), pdfSafe(ev.label), n]);
     doc.autoTable({
@@ -7721,11 +7736,7 @@ function PlayerStatsAccordion({ players, events, matches, ratings }) {
               )}
               {open &&
                 (() => {
-                  const own = events.filter((e) => e.playerId === p.id);
-                  const counts = {};
-                  own.forEach((e) => {
-                    counts[e.type] = (counts[e.type] || 0) + 1;
-                  });
+                  const counts = withGoalsAsShots(countEventTypes(events.filter((e) => e.playerId === p.id)));
                   const usedTypes = EVENT_TYPES.filter(
                     (ev) => counts[ev.id] && !(isGoalkeeper && FIELD_PLAYER_GROUPS.includes(ev.group))
                   );
@@ -7891,10 +7902,7 @@ function PercentBreakdownChart({ title, segments }) {
 // por partido (total ÷ partidos jugados, con un decimal) en vez del total. El resto de
 // tarjetas siguen con totales y porcentajes. En el resumen de un partido no se pasa.
 function TeamStatsCharts({ events, teamEvents = [], matchesPlayed }) {
-  const totals = {};
-  events.forEach((e) => {
-    totals[e.type] = (totals[e.type] || 0) + 1;
-  });
+  const totals = withGoalsAsShots(countEventTypes(events));
   const count = (t) => totals[t] || 0;
   const teamCount = (t) => teamEvents.filter((e) => e.type === t).length;
 
@@ -8571,7 +8579,7 @@ function computeRadarData(matches, squad) {
   );
   const values = {};
   squad.forEach((p) => {
-    const counts = countsBy[p.id] || {};
+    const counts = withGoalsAsShots(countsBy[p.id] || {});
     const c = (type) => counts[type] || 0;
     const minutes = minutesBy[p.id] || 0;
     values[p.id] = { minutes, byMetric: {} };
