@@ -8407,18 +8407,469 @@ function SeasonStats({ matches, squad, onBack, onGoCharts }) {
 /* ---------------------------------------------------------
    Pantalla: Gráficos de jugadores
 --------------------------------------------------------- */
-function PlayerChartsScreen({ players, events, teamEvents, matches, onBack }) {
-  const [tab, setTab] = useState("jugadores");
+/* ---------------------------------------------------------
+   Gráficos de temporada: tipos de gráfico. Cada tipo es una entrada de SEASON_CHART_TYPES con
+   su propio componente; para añadir uno nuevo (dispersión, evolución...) basta otra entrada.
+--------------------------------------------------------- */
+const RADAR_MIN_ATTEMPTS = 5; // intentos mínimos en la temporada para dar un % de acierto
+const RADAR_MIN_MINUTES = 90; // por debajo, los valores por 90' son poco fiables
+const RADAR_MAX_PLAYERS = 4;
+const RADAR_MAX_AXES = 8;
+const RADAR_MIN_AXES = 3;
+
+// Un color y una forma de punto por jugador: la forma distingue a los jugadores aunque no se
+// distingan los colores. Paleta comprobada para 4 series superpuestas sobre el fondo de la app.
+const RADAR_SERIES = [
+  { color: "#3987e5", shape: "circle" },
+  { color: "#c98500", shape: "square" },
+  { color: "#d55181", shape: "triangle" },
+  { color: "#008300", shape: "diamond" },
+];
+
+// Ejes posibles. per90: conteo por cada 90 minutos jugados; pct: % de acierto (con un mínimo
+// de intentos); minutes: minutos jugados en la temporada. `c(tipo)` = veces que lo registró.
+const RADAR_METRICS = [
+  { id: "goles", label: "Goles", short: "Goles /90", kind: "per90", count: (c) => ALL_GOAL_TYPES.reduce((s, t) => s + c(t), 0) },
+  { id: "asistencias", label: "Asistencias", short: "Asist. /90", kind: "per90", count: (c) => c("asistencia") },
+  { id: "pases_clave", label: "Pases clave", short: "Pases clave /90", kind: "per90", count: (c) => c("pase_clave") },
+  {
+    id: "remates_puerta",
+    label: "Remates a puerta (% de sus remates)",
+    short: "Remates a puerta %",
+    kind: "pct",
+    ok: (c) => c("remate_puerta"),
+    attempts: (c) => c("remate_puerta") + c("remate_fuera"),
+  },
+  {
+    id: "regates",
+    label: "Regates completados (% de sus regates)",
+    short: "Regates %",
+    kind: "pct",
+    ok: (c) => c("regate"),
+    attempts: (c) => c("regate") + c("regate_fallado"),
+  },
+  {
+    id: "duelos",
+    label: "Duelos ganados, aéreos incluidos (% de sus duelos)",
+    short: "Duelos ganados %",
+    kind: "pct",
+    ok: (c) => c("duelo_ganado") + c("duelo_general_ganado"),
+    attempts: (c) => c("duelo_ganado") + c("duelo_general_ganado") + c("duelo_perdido") + c("duelo_general_perdido"),
+  },
+  {
+    id: "despejes",
+    label: "Despejes (% de despejes buenos)",
+    short: "Despejes %",
+    kind: "pct",
+    ok: (c) => c("despeje"),
+    attempts: (c) => c("despeje") + c("despeje_fallado"),
+  },
+  { id: "recuperaciones", label: "Recuperaciones", short: "Recup. /90", kind: "per90", count: (c) => c("recuperacion") },
+  { id: "faltas_cometidas", label: "Faltas cometidas", short: "Faltas com. /90", kind: "per90", count: (c) => c("falta_cometida") },
+  { id: "faltas_recibidas", label: "Faltas recibidas", short: "Faltas rec. /90", kind: "per90", count: (c) => c("falta_recibida") },
+  { id: "perdidas", label: "Pérdidas de balón", short: "Pérdidas /90", kind: "per90", count: (c) => c("perdida") },
+  {
+    id: "remates",
+    label: "Remates (a puerta + fuera)",
+    short: "Remates /90",
+    kind: "per90",
+    count: (c) => c("remate_puerta") + c("remate_fuera"),
+  },
+  {
+    id: "paradas",
+    label: "Paradas",
+    short: "Paradas /90",
+    kind: "per90",
+    count: (c) => c("parada_area") + c("parada_fuera_area") + c("parada_area_pequena"),
+  },
+  { id: "minutos", label: "Minutos jugados", short: "Minutos", kind: "minutes" },
+];
+const RADAR_METRIC = Object.fromEntries(RADAR_METRICS.map((m) => [m.id, m]));
+
+const RADAR_BLOCKS = [
+  { id: "ataque", label: "Ataque", axes: ["goles", "asistencias", "remates_puerta", "pases_clave", "regates"] },
+  { id: "defensa", label: "Defensa", axes: ["duelos", "despejes", "recuperaciones", "faltas_cometidas"] },
+  { id: "general", label: "General", axes: ["goles", "asistencias", "pases_clave", "recuperaciones", "duelos", "minutos"] },
+  { id: "personalizado", label: "Personalizado", axes: null },
+];
+
+// Valor real de un jugador en un eje: { value, total, ok, attempts, missing } (value null = no se dibuja)
+function radarMetricValue(metric, c, minutes) {
+  if (metric.kind === "minutes") return { value: minutes, total: minutes };
+  if (metric.kind === "per90") {
+    const total = metric.count(c);
+    return minutes > 0 ? { value: (total / minutes) * 90, total } : { value: null, total, missing: "Sin minutos" };
+  }
+  const ok = metric.ok(c);
+  const attempts = metric.attempts(c);
+  if (attempts < RADAR_MIN_ATTEMPTS) {
+    return { value: null, ok, attempts, missing: `Sin datos suficientes (${attempts} de ${RADAR_MIN_ATTEMPTS} intentos)` };
+  }
+  return { value: (ok / attempts) * 100, ok, attempts };
+}
+
+function formatRadarValue(metric, v) {
+  if (v.value == null) return v.missing;
+  if (metric.kind === "minutes") return `${Math.round(v.value)}'`;
+  if (metric.kind === "pct") return `${Math.round(v.value)}%`;
+  return `${v.value.toFixed(2).replace(".", ",")} /90'`;
+}
+
+function formatRadarTotal(metric, v) {
+  if (metric.kind === "minutes") return "en la temporada";
+  if (metric.kind === "pct") return `${v.ok} de ${v.attempts} en la temporada`;
+  return `${v.total} en la temporada`;
+}
+
+// Datos de toda la plantilla en la temporada: valores reales por jugador y eje, y el máximo del
+// equipo en cada eje (para escalar 0-100). El máximo sale solo de valores fiables (jugadores
+// con 90' o más en los ejes por 90', y con el mínimo de intentos en los %), para que un
+// suplente con un gol en 5 minutos no aplaste la escala de todos los demás.
+function computeRadarData(matches, squad) {
+  const played = (matches || []).filter((m) => !m.scheduled);
+  const minutesBy = computeSeasonMinutesByPlayer(played);
+  const countsBy = {};
+  played.forEach((m) =>
+    (m.events || []).forEach((e) => {
+      const byType = (countsBy[e.playerId] = countsBy[e.playerId] || {});
+      byType[e.type] = (byType[e.type] || 0) + 1;
+    })
+  );
+  const values = {};
+  squad.forEach((p) => {
+    const counts = countsBy[p.id] || {};
+    const c = (type) => counts[type] || 0;
+    const minutes = minutesBy[p.id] || 0;
+    values[p.id] = { minutes, byMetric: {} };
+    RADAR_METRICS.forEach((metric) => {
+      values[p.id].byMetric[metric.id] = radarMetricValue(metric, c, minutes);
+    });
+  });
+  const teamMax = {};
+  RADAR_METRICS.forEach((metric) => {
+    let max = 0;
+    squad.forEach((p) => {
+      const v = values[p.id].byMetric[metric.id];
+      if (v.value == null) return;
+      if (metric.kind === "per90" && values[p.id].minutes < RADAR_MIN_MINUTES) return;
+      max = Math.max(max, v.value);
+    });
+    teamMax[metric.id] = max;
+  });
+  return { values, teamMax };
+}
+
+function RadarMarker({ shape, x, y, color, r = 4.5 }) {
+  const ring = { stroke: "var(--ink)", strokeWidth: 1.5 };
+  if (shape === "square") return <rect x={x - r} y={y - r} width={2 * r} height={2 * r} rx={1} fill={color} {...ring} />;
+  if (shape === "triangle") {
+    const h = r * 1.25;
+    return <polygon points={`${x},${y - h} ${x + h},${y + h * 0.8} ${x - h},${y + h * 0.8}`} fill={color} {...ring} />;
+  }
+  if (shape === "diamond") {
+    const h = r * 1.3;
+    return <polygon points={`${x},${y - h} ${x + h},${y} ${x},${y + h} ${x - h},${y}`} fill={color} {...ring} />;
+  }
+  return <circle cx={x} cy={y} r={r} fill={color} {...ring} />;
+}
+
+// Parte una etiqueta en dos líneas si es larga, por el espacio más cercano a la mitad
+function splitRadarLabel(text) {
+  if (text.length <= 12 || !text.includes(" ")) return [text];
+  const mid = text.length / 2;
+  let best = -1;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === " " && (best === -1 || Math.abs(i - mid) < Math.abs(best - mid))) best = i;
+  }
+  return [text.slice(0, best), text.slice(best + 1)];
+}
+
+function RadarChart({ axes, series, teamMax, focus, onFocus }) {
+  const W = 400;
+  const H = 350;
+  const cx = W / 2;
+  const cy = H / 2;
+  const R = 108;
+  const n = axes.length;
+  const angle = (i) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
+  const point = (i, pct) => [cx + Math.cos(angle(i)) * (R * pct) / 100, cy + Math.sin(angle(i)) * (R * pct) / 100];
+  const norm = (metric, v) => (v.value == null || !teamMax[metric.id] ? 0 : Math.min(100, (v.value / teamMax[metric.id]) * 100));
+  const missingAxes = new Set(axes.filter((m) => series.some((s) => s.values[m.id].value == null)).map((m) => m.id));
 
   return (
-    <div className="max-w-4xl mx-auto p-4 pb-10">
-      <div className="flex items-center gap-3 mb-4 pt-2">
-        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
-          Volver
-        </button>
-        <h1 className="display text-2xl font-semibold">Gráficos</h1>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxWidth: 520, display: "block", margin: "0 auto" }} role="img"
+      aria-label={`Radar de ${series.map((s) => s.player.name).join(", ")}: ${axes.map((a) => a.short).join(", ")}`}>
+      {/* Rejilla: 25, 50, 75 y 100 % del mejor del equipo */}
+      {[25, 50, 75, 100].map((pct) => (
+        <polygon key={pct} points={axes.map((_, i) => point(i, pct).join(",")).join(" ")} fill="none"
+          stroke="var(--chalk-dim)" strokeOpacity={pct === 100 ? 0.35 : 0.15} strokeWidth={1} />
+      ))}
+      {axes.map((m, i) => {
+        const [x, y] = point(i, 100);
+        const [lx, ly] = point(i, 100 + 15 / R * 100);
+        const cos = Math.cos(angle(i));
+        const sin = Math.sin(angle(i));
+        const anchor = cos > 0.3 ? "start" : cos < -0.3 ? "end" : "middle";
+        const lines = splitRadarLabel(m.short + (missingAxes.has(m.id) ? " *" : ""));
+        const y0 = ly + (sin > 0.3 ? 10 : sin < -0.3 ? -4 - (lines.length - 1) * 15 : 5 - (lines.length - 1) * 7.5);
+        return (
+          <g key={m.id}>
+            <line x1={cx} y1={cy} x2={x} y2={y} stroke="var(--chalk-dim)" strokeOpacity={0.15} strokeWidth={1} />
+            <text x={lx} y={y0} textAnchor={anchor} fontSize={13.5} fill="var(--chalk-dim)">
+              {lines.map((t, k) => (
+                <tspan key={k} x={lx} dy={k === 0 ? 0 : 15}>{t}</tspan>
+              ))}
+            </text>
+          </g>
+        );
+      })}
+
+      {series.map((s) => {
+        const pts = axes.map((m, i) => point(i, norm(m, s.values[m.id])));
+        const dim = focus && focus.playerId !== s.player.id;
+        return (
+          <g key={s.player.id} opacity={dim ? 0.35 : 1}>
+            <polygon points={pts.map((p) => p.join(",")).join(" ")} fill={s.color} fillOpacity={0.12} stroke="none" />
+            {/* Los tramos que llegan a un eje sin datos van discontinuos: ese punto no es un 0 real */}
+            {pts.map((p, i) => {
+              const j = (i + 1) % n;
+              const gap = s.values[axes[i].id].value == null || s.values[axes[j].id].value == null;
+              return (
+                <line key={i} x1={p[0]} y1={p[1]} x2={pts[j][0]} y2={pts[j][1]} stroke={s.color} strokeWidth={2}
+                  strokeOpacity={gap ? 0.5 : 1} strokeDasharray={gap ? "3 4" : undefined} strokeLinecap="round" />
+              );
+            })}
+          </g>
+        );
+      })}
+
+      {/* Puntos encima de todas las áreas, con una zona de toque mayor que el punto */}
+      {series.map((s) =>
+        axes.map((m, i) => {
+          const v = s.values[m.id];
+          if (v.value == null) return null;
+          const [x, y] = point(i, norm(m, v));
+          const active = focus && focus.playerId === s.player.id && focus.metricId === m.id;
+          return (
+            <g key={`${s.player.id}-${m.id}`} style={{ cursor: "pointer" }}
+              onClick={() => onFocus(active ? null : { playerId: s.player.id, metricId: m.id })}
+              onMouseEnter={() => onFocus({ playerId: s.player.id, metricId: m.id })}>
+              <RadarMarker shape={s.shape} x={x} y={y} color={s.color} r={active ? 6 : 4.5} />
+              <circle cx={x} cy={y} r={13} fill="transparent" />
+            </g>
+          );
+        })
+      )}
+    </svg>
+  );
+}
+
+function RadarChartPanel({ squad, matches }) {
+  const [picked, setPicked] = useState([]); // [{ id, slot }]: el color va con el jugador, no con su orden
+  const [blockId, setBlockId] = useState("ataque");
+  const [customAxes, setCustomAxes] = useState(["goles", "asistencias", "pases_clave", "recuperaciones", "duelos"]);
+  const [focus, setFocus] = useState(null); // { playerId, metricId? }
+
+  const { values, teamMax } = React.useMemo(() => computeRadarData(matches, squad), [matches, squad]);
+  const block = RADAR_BLOCKS.find((b) => b.id === blockId);
+  const axes = (block.axes || customAxes).map((id) => RADAR_METRIC[id]).filter(Boolean);
+  const players = [...squad].sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0));
+  const series = picked
+    .map(({ id, slot }) => {
+      const player = squad.find((p) => p.id === id);
+      return player && { player, ...RADAR_SERIES[slot], values: values[id].byMetric, minutes: values[id].minutes };
+    })
+    .filter(Boolean);
+
+  function togglePlayer(id) {
+    if (picked.some((p) => p.id === id)) {
+      setPicked(picked.filter((p) => p.id !== id));
+      if (focus && focus.playerId === id) setFocus(null);
+      return;
+    }
+    if (picked.length >= RADAR_MAX_PLAYERS) return;
+    const used = new Set(picked.map((p) => p.slot));
+    const slot = RADAR_SERIES.findIndex((_, i) => !used.has(i));
+    setPicked([...picked, { id, slot }]);
+  }
+
+  function toggleCustomAxis(id) {
+    if (customAxes.includes(id)) setCustomAxes(customAxes.filter((x) => x !== id));
+    else if (customAxes.length < RADAR_MAX_AXES) setCustomAxes([...customAxes, id]);
+  }
+
+  const dim = { color: "var(--chalk-dim)" };
+  const activeTab = { background: "var(--turf)", color: "#0F1B14", border: "none" };
+  const focusSeries = focus && series.find((s) => s.player.id === focus.playerId);
+  const focusMetric = focus && focus.metricId && RADAR_METRIC[focus.metricId];
+  const missingNotes = axes
+    .map((m) => ({ m, who: series.filter((s) => s.values[m.id].value == null).map((s) => s.player.name) }))
+    .filter((x) => x.who.length);
+
+  return (
+    <div>
+      {/* Jugadores */}
+      <div className="mp-card p-3 mb-3">
+        <div className="text-xs mb-2" style={dim}>
+          Jugadores ({picked.length}/{RADAR_MAX_PLAYERS}) — toca para añadir o quitar
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {players.map((p) => {
+            const sel = picked.find((x) => x.id === p.id);
+            const full = !sel && picked.length >= RADAR_MAX_PLAYERS;
+            return (
+              <button key={p.id} onClick={() => togglePlayer(p.id)} disabled={full}
+                className="mp-btn px-2.5 py-1.5 text-xs disabled:opacity-30 flex items-center gap-1.5"
+                style={sel ? { borderColor: RADAR_SERIES[sel.slot].color, color: "var(--chalk)" } : {}}>
+                {sel && (
+                  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                    <RadarMarker shape={RADAR_SERIES[sel.slot].shape} x={6} y={6} r={4} color={RADAR_SERIES[sel.slot].color} />
+                  </svg>
+                )}
+                {p.number} · {p.name}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
+      {/* Bloques de ejes */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+        {RADAR_BLOCKS.map((b) => (
+          <button key={b.id} onClick={() => { setBlockId(b.id); setFocus(null); }}
+            className="mp-btn px-2 py-2 text-sm" style={blockId === b.id ? activeTab : {}}>
+            {b.label}
+          </button>
+        ))}
+      </div>
+
+      {blockId === "personalizado" && (
+        <div className="mp-card p-3 mb-3">
+          <div className="text-xs mb-2" style={dim}>
+            Ejes ({customAxes.length}/{RADAR_MAX_AXES}) — elige entre {RADAR_MIN_AXES} y {RADAR_MAX_AXES}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {RADAR_METRICS.map((m) => {
+              const on = customAxes.includes(m.id);
+              return (
+                <button key={m.id} onClick={() => toggleCustomAxis(m.id)} disabled={!on && customAxes.length >= RADAR_MAX_AXES}
+                  className="mp-btn px-2.5 py-1.5 text-xs disabled:opacity-30" style={on ? activeTab : {}}>
+                  {m.short}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {series.length === 0 ? (
+        <div className="mp-card p-4 text-sm" style={dim}>Elige de 1 a {RADAR_MAX_PLAYERS} jugadores para ver su radar.</div>
+      ) : axes.length < RADAR_MIN_AXES ? (
+        <div className="mp-card p-4 text-sm" style={dim}>Elige al menos {RADAR_MIN_AXES} ejes para dibujar el radar.</div>
+      ) : (
+        <div className="mp-card p-3">
+          {/* Leyenda: tocar un jugador muestra todos sus valores reales */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1.5 mb-2">
+            {series.map((s) => (
+              <button key={s.player.id} className="flex items-center gap-1.5 text-sm text-left"
+                onClick={() => setFocus(focus && focus.playerId === s.player.id && !focus.metricId ? null : { playerId: s.player.id })}>
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <RadarMarker shape={s.shape} x={7} y={7} r={4.5} color={s.color} />
+                </svg>
+                <span style={{ color: "var(--chalk)" }}>{s.player.name}</span>
+                {s.minutes < RADAR_MIN_MINUTES && (
+                  <span className="text-xs" style={{ color: "var(--amber)" }}>⚠ solo {s.minutes}': poco fiable</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          <RadarChart axes={axes} series={series} teamMax={teamMax} focus={focus} onFocus={setFocus} />
+
+          <div className="text-xs mt-1 mb-2 text-center" style={dim}>
+            Escala relativa a la plantilla: el borde exterior es el mejor valor del equipo en cada eje.
+          </div>
+
+          {/* Valor real del punto o del jugador tocado */}
+          {focusSeries && (
+            <div className="mp-card p-2.5 mb-2 text-sm" style={{ borderColor: focusSeries.color }}>
+              <div className="font-semibold mb-1" style={{ color: "var(--chalk)" }}>
+                {focusSeries.player.name} · {focusSeries.minutes}' en la temporada
+              </div>
+              {(focusMetric ? [focusMetric] : axes).map((m) => {
+                const v = focusSeries.values[m.id];
+                return (
+                  <div key={m.id} className="flex justify-between gap-3">
+                    <span style={dim}>{m.label}</span>
+                    <span className="text-right" style={{ color: "var(--chalk)" }}>
+                      {formatRadarValue(m, v)}
+                      {v.value != null && m.kind !== "minutes" && <span style={dim}> · {formatRadarTotal(m, v)}</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {missingNotes.length > 0 && (
+            <div className="text-xs mb-2" style={dim}>
+              * Sin datos suficientes (menos de {RADAR_MIN_ATTEMPTS} intentos o sin minutos), no se dibuja:{" "}
+              {missingNotes.map((x) => `${x.m.short}: ${x.who.join(", ")}`).join(" · ")}
+            </div>
+          )}
+
+          {/* Tabla con los valores reales de cada eje */}
+          <div className="mp-scroll overflow-x-auto mt-2">
+            <table className="text-xs w-full" style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th className="text-left p-1.5 font-normal" style={dim}>Eje</th>
+                  {series.map((s) => (
+                    <th key={s.player.id} className="text-right p-1.5 font-semibold" style={{ color: "var(--chalk)" }}>
+                      <span className="inline-flex items-center gap-1">
+                        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                          <RadarMarker shape={s.shape} x={5} y={5} r={3.5} color={s.color} />
+                        </svg>
+                        {s.player.name}
+                      </span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {axes.map((m) => (
+                  <tr key={m.id} style={{ borderTop: "1px solid rgba(201,196,180,0.15)" }}>
+                    <td className="p-1.5" style={dim}>{m.short}</td>
+                    {series.map((s) => {
+                      const v = s.values[m.id];
+                      return (
+                        <td key={s.player.id} className="p-1.5 text-right" style={{ color: "var(--chalk)" }}>
+                          {v.value == null ? <span style={dim}>Sin datos</span> : formatRadarValue(m, v).replace(" /90'", "")}
+                          {v.value != null && m.kind !== "minutes" && (
+                            <div style={dim}>{m.kind === "pct" ? `${v.ok}/${v.attempts}` : `${v.total} total`}</div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[11px] mt-2" style={dim}>
+            Conteos por cada 90 minutos jugados (debajo, el total de la temporada). Porcentajes solo con {RADAR_MIN_ATTEMPTS} o más intentos.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Barras y totales: los gráficos de siempre, con sus pestañas Jugadores / Equipo
+function SeasonBarCharts({ players, events, teamEvents, matches }) {
+  const [tab, setTab] = useState("jugadores");
+  return (
+    <React.Fragment>
       <div className="flex gap-2 mb-4">
         <button
           onClick={() => setTab("jugadores")}
@@ -8445,6 +8896,41 @@ function PlayerChartsScreen({ players, events, teamEvents, matches, onBack }) {
           matchesPlayed={(matches || []).filter((m) => !m.scheduled).length}
         />
       )}
+    </React.Fragment>
+  );
+}
+
+const SEASON_CHART_TYPES = [
+  { id: "barras", label: "Barras y totales", Component: SeasonBarCharts },
+  { id: "radar", label: "Radar", Component: ({ players, matches }) => <RadarChartPanel squad={players} matches={matches} /> },
+];
+
+function PlayerChartsScreen({ players, events, teamEvents, matches, onBack }) {
+  const [chartType, setChartType] = useState(SEASON_CHART_TYPES[0].id);
+  const { Component } = SEASON_CHART_TYPES.find((t) => t.id === chartType);
+
+  return (
+    <div className="max-w-4xl mx-auto p-4 pb-10">
+      <div className="flex items-center gap-3 mb-4 pt-2">
+        <button onClick={onBack} className="mp-btn mp-btn-outline px-3 py-2 text-sm">
+          Volver
+        </button>
+        <h1 className="display text-2xl font-semibold">Gráficos</h1>
+      </div>
+
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-xs shrink-0" style={{ color: "var(--chalk-dim)" }}>Tipo de gráfico</span>
+        <div className="flex gap-1.5 flex-wrap">
+          {SEASON_CHART_TYPES.map((t) => (
+            <button key={t.id} onClick={() => setChartType(t.id)} className="mp-btn mp-btn-outline px-3 py-1.5 text-xs"
+              style={chartType === t.id ? { borderColor: "var(--turf)", color: "var(--turf)" } : {}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <Component players={players} events={events} teamEvents={teamEvents} matches={matches} />
     </div>
   );
 }
