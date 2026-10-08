@@ -8426,7 +8426,6 @@ const RADAR_MAX_AXES = 8;
 const RADAR_MIN_AXES = 3;
 // Con menos jugadores de referencia que esto (con más de 90'), la media no dice nada: se avisa
 const RADAR_MIN_REFERENCE = { campo: 4, portero: 2 };
-const RADAR_AVG_RING = 50; // la media de la plantilla siempre en este anillo; el doble de la media = 100
 
 // Un color y una forma de punto por jugador: la forma distingue a los jugadores aunque no se
 // distingan los colores. Paleta comprobada para 4 series superpuestas sobre el fondo de la app.
@@ -8542,7 +8541,7 @@ function formatRadarTotal(metric, v) {
   return `${v.total} en la temporada`;
 }
 
-// Media de un grupo (campo o porteros), ponderada por minutos y solo con quienes superan los
+// Media y máximo de un grupo (campo o porteros). Media ponderada por minutos y solo con quienes superan los
 // 90' en la temporada. Por 90': todo lo que hicieron entre todos sus minutos (es la media de
 // sus valores por 90' ponderada por minutos). %: media de sus % (con el mínimo de intentos)
 // ponderada por minutos. Minutos: la media de sus minutos.
@@ -8563,7 +8562,17 @@ function computeRadarAverage(players, values) {
       avg[metric.id] = mins ? withData.reduce((s, p) => s + values[p.id].byMetric[metric.id].value * values[p.id].minutes, 0) / mins : null;
     }
   });
-  return { avg, count: ref.length };
+  // Máximo del grupo en cada eje (la punta del eje). En los ejes por 90' solo cuentan quienes
+  // tienen 90' o más: un suplente con un gol en 10 minutos (9 por 90') aplastaría la escala.
+  const max = {};
+  RADAR_METRICS.forEach((metric) => {
+    max[metric.id] = players.reduce((best, p) => {
+      const v = values[p.id].byMetric[metric.id].value;
+      if (v == null || (metric.kind === "per90" && values[p.id].minutes < RADAR_MIN_MINUTES)) return best;
+      return Math.max(best, v);
+    }, 0);
+  });
+  return { avg, max, count: ref.length };
 }
 
 // Valores reales de toda la plantilla en la temporada y la media de jugadores de campo y de porteros
@@ -8596,11 +8605,11 @@ function computeRadarData(matches, squad) {
   };
 }
 
-// Posición en el radar (0-100): la media en el anillo 50, el doble de la media en 100 (tope).
-// Sin valor, o sin media con la que comparar (nadie del equipo lo hace), no se dibuja.
-function radarScaled(v, avg) {
-  if (v.value == null || !avg) return null;
-  return Math.min(100, (v.value / avg) * RADAR_AVG_RING);
+// Posición en el radar (0-100) en valores reales: 0 en el centro y el máximo del grupo en la
+// punta del eje. Sin valor, o si nadie del grupo lo tiene (máximo 0), no se dibuja.
+function radarScaled(value, max) {
+  if (value == null || !max) return null;
+  return Math.min(100, (value / max) * 100);
 }
 
 function RadarMarker({ shape, x, y, color, r = 4.5 }) {
@@ -8628,7 +8637,7 @@ function splitRadarLabel(text) {
   return [text.slice(0, best), text.slice(best + 1)];
 }
 
-function RadarChart({ axes, series, avg, focus, onFocus }) {
+function RadarChart({ axes, series, avg, max, focus, onFocus }) {
   const W = 440;
   const H = 350;
   const cx = W / 2;
@@ -8637,14 +8646,20 @@ function RadarChart({ axes, series, avg, focus, onFocus }) {
   const n = axes.length;
   const angle = (i) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
   const point = (i, pct) => [cx + Math.cos(angle(i)) * (R * pct) / 100, cy + Math.sin(angle(i)) * (R * pct) / 100];
-  const scaled = (s, m) => radarScaled(s.values[m.id], avg[m.id]);
-  const markedAxes = new Set(axes.filter((m) => !avg[m.id] || series.some((s) => scaled(s, m) == null)).map((m) => m.id));
+  const scaled = (s, m) => radarScaled(s.values[m.id].value, max[m.id]);
+  const avgVals = axes.map((m) => radarScaled(avg[m.id], max[m.id]));
+  const avgPts = avgVals.map((v, i) => point(i, v == null ? 0 : v));
+  const markedAxes = new Set(
+    axes
+      .filter((m, i) => avgVals[i] == null || series.some((s) => scaled(s, m) == null || s.values[m.id].value > max[m.id]))
+      .map((m) => m.id)
+  );
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxWidth: 560, display: "block", margin: "0 auto" }} role="img"
       aria-label={`Radar de ${series.map((s) => s.player.name).join(", ")} frente a la media de la plantilla: ${axes.map((a) => a.short).join(", ")}`}>
-      {/* Rejilla: 25 = mitad de la media, 75 = 1,5 veces, 100 = el doble o más */}
-      {[25, 75, 100].map((pct) => (
+      {/* Rejilla: 25, 50, 75 y 100 % del máximo de cada eje */}
+      {[25, 50, 75, 100].map((pct) => (
         <polygon key={pct} points={axes.map((_, i) => point(i, pct).join(",")).join(" ")} fill="none"
           stroke="var(--chalk-dim)" strokeOpacity={pct === 100 ? 0.3 : 0.13} strokeWidth={1} />
       ))}
@@ -8654,23 +8669,38 @@ function RadarChart({ axes, series, avg, focus, onFocus }) {
         const cos = Math.cos(angle(i));
         const sin = Math.sin(angle(i));
         const anchor = cos > 0.3 ? "start" : cos < -0.3 ? "end" : "middle";
-        const lines = splitRadarLabel(m.short + (markedAxes.has(m.id) ? " *" : ""));
+        // Nombre del eje y, debajo, su valor máximo (el de la punta)
+        const lines = [
+          ...splitRadarLabel(m.short + (markedAxes.has(m.id) ? " *" : "")),
+          max[m.id] ? `máx. ${formatRadarNumber(m, max[m.id])}` : "sin datos",
+        ];
         const y0 = ly + (sin > 0.3 ? 10 : sin < -0.3 ? -4 - (lines.length - 1) * 15 : 5 - (lines.length - 1) * 7.5);
         return (
           <g key={m.id}>
             <line x1={cx} y1={cy} x2={x} y2={y} stroke="var(--chalk-dim)" strokeOpacity={0.13} strokeWidth={1} />
             <text x={lx} y={y0} textAnchor={anchor} fontSize={13.5} fill="var(--chalk-dim)">
               {lines.map((t, k) => (
-                <tspan key={k} x={lx} dy={k === 0 ? 0 : 15}>{t}</tspan>
+                <tspan key={k} x={lx} dy={k === 0 ? 0 : 15} fontSize={k === lines.length - 1 ? 12.5 : undefined}
+                  fill={k === lines.length - 1 ? "var(--chalk)" : undefined} fillOpacity={k === lines.length - 1 ? 0.7 : undefined}>
+                  {t}
+                </tspan>
               ))}
             </text>
           </g>
         );
       })}
 
-      {/* Media de la plantilla: gris discontinuo, siempre en el anillo 50 */}
-      <polygon points={axes.map((_, i) => point(i, RADAR_AVG_RING).join(",")).join(" ")} fill="var(--chalk-dim)" fillOpacity={0.06}
-        stroke="var(--chalk-dim)" strokeOpacity={0.75} strokeWidth={1.5} strokeDasharray="5 4" />
+      {/* Media del equipo: gris discontinuo en su valor real en cada eje (si en un eje no hay
+          media, ese punto va al centro y sus tramos más tenues) */}
+      <polygon points={avgPts.map((p) => p.join(",")).join(" ")} fill="var(--chalk-dim)" fillOpacity={0.06} stroke="none" />
+      {avgPts.map((p, i) => {
+        const j = (i + 1) % n;
+        const gap = avgVals[i] == null || avgVals[j] == null;
+        return (
+          <line key={`avg-${i}`} x1={p[0]} y1={p[1]} x2={avgPts[j][0]} y2={avgPts[j][1]} stroke="var(--chalk-dim)"
+            strokeOpacity={gap ? 0.35 : 0.8} strokeWidth={1.5} strokeDasharray="5 4" />
+        );
+      })}
 
       {series.map((s) => {
         const vals = axes.map((m) => scaled(s, m));
@@ -8743,7 +8773,7 @@ function RadarChartPanel({ squad, matches }) {
   const firstPicked = picked.length ? squad.find((p) => p.id === picked[0].id) : null;
   const group = firstPicked && isGoalkeeper(firstPicked) ? "portero" : "campo";
   const isGkRadar = group === "portero";
-  const { avg, count: refCount } = averages[group];
+  const { avg, max, count: refCount } = averages[group];
   const block = RADAR_BLOCKS.find((b) => b.id === blockId);
   const axes = (isGkRadar ? RADAR_GK_AXES : block.axes || customAxes).map((id) => RADAR_METRIC[id]).filter(Boolean);
   const series = picked
@@ -8775,13 +8805,22 @@ function RadarChartPanel({ squad, matches }) {
   const groupLabel = isGkRadar ? "porteros" : "jugadores de campo";
   const focusSeries = focus && series.find((s) => s.player.id === focus.playerId);
   const focusMetric = focus && focus.metricId && RADAR_METRIC[focus.metricId];
+  // Notas por eje: lo que no se dibuja o no cabe en la escala
   const notes = axes
-    .map((m) => ({
-      m,
-      noAvg: !avg[m.id],
-      who: series.filter((s) => s.values[m.id].value == null).map((s) => s.player.name),
-    }))
-    .filter((x) => x.noAvg || x.who.length);
+    .map((m) => {
+      const noScale = !max[m.id];
+      const parts = [];
+      if (noScale) parts.push(`ningún ${isGkRadar ? "portero" : "jugador de campo"} lo tiene, no se dibuja`);
+      else {
+        if (avg[m.id] == null) parts.push("sin media del equipo");
+        const who = series.filter((s) => s.values[m.id].value == null).map((s) => s.player.name);
+        if (who.length) parts.push(`${who.join(", ")} sin datos suficientes`);
+        const over = series.filter((s) => s.values[m.id].value > max[m.id]).map((s) => s.player.name);
+        if (over.length) parts.push(`${over.join(", ")} por encima del máximo (pocos minutos), en la punta`);
+      }
+      return { m, parts };
+    })
+    .filter((x) => x.parts.length);
 
   function chipsFor(list, listGroup) {
     return list.map((p) => {
@@ -8882,10 +8921,10 @@ function RadarChartPanel({ squad, matches }) {
             </span>
           </div>
 
-          <RadarChart axes={axes} series={series} avg={avg} focus={focus} onFocus={setFocus} />
+          <RadarChart axes={axes} series={series} avg={avg} max={max} focus={focus} onFocus={setFocus} />
 
           <div className="text-xs mt-1 mb-2 text-center" style={dim}>
-            Línea gris = media de la plantilla. Por fuera, por encima de la media; el borde exterior es el doble o más.
+            Valores reales: cada eje va de 0 (centro) al máximo de los {groupLabel} en esa acción (punta). Línea gris = media del equipo.
           </div>
 
           {/* Valor real del punto o del jugador tocado */}
@@ -8912,11 +8951,8 @@ function RadarChartPanel({ squad, matches }) {
 
           {notes.length > 0 && (
             <div className="text-xs mb-2" style={dim}>
-              * No se dibuja:{" "}
-              {notes
-                .map((x) => `${x.m.short}: ${x.noAvg ? `sin media de ${groupLabel} con la que comparar` : `${x.who.join(", ")} sin datos suficientes`}`)
-                .join(" · ")}
-              . Los % necesitan {RADAR_MIN_ATTEMPTS} intentos en la temporada.
+              * {notes.map((x) => `${x.m.short}: ${x.parts.join("; ")}`).join(" · ")}. Los % necesitan {RADAR_MIN_ATTEMPTS} intentos
+              en la temporada.
             </div>
           )}
 
@@ -8925,44 +8961,42 @@ function RadarChartPanel({ squad, matches }) {
             <table className="text-xs w-full" style={{ borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  <th className="text-left p-1.5 font-normal" style={dim}>Eje</th>
+                  <th className="text-left p-1 font-normal align-bottom" style={dim}>Eje</th>
                   {series.map((s) => (
-                    <th key={s.player.id} className="text-right p-1.5 font-semibold" style={{ color: "var(--chalk)" }}>
-                      <span className="inline-flex items-center gap-1">
-                        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                          <RadarMarker shape={s.shape} x={5} y={5} r={3.5} color={s.color} />
-                        </svg>
-                        {s.player.name}
-                      </span>
+                    <th key={s.player.id} className="text-right p-1 font-semibold align-bottom" style={{ color: "var(--chalk)" }} title={s.player.name}>
+                      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style={{ display: "inline-block", marginBottom: 2 }}>
+                        <RadarMarker shape={s.shape} x={5} y={5} r={3.5} color={s.color} />
+                      </svg>
+                      <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 72 }}>{s.player.name}</div>
                     </th>
                   ))}
-                  <th className="text-right p-1.5 font-normal" style={dim}>Media</th>
+                  <th className="text-right p-1 font-normal align-bottom" style={dim}>Media</th>
                 </tr>
               </thead>
               <tbody>
                 {axes.map((m) => (
                   <tr key={m.id} style={{ borderTop: "1px solid rgba(201,196,180,0.15)" }}>
-                    <td className="p-1.5" style={dim}>{m.short}</td>
+                    <td className="p-1" style={dim}>{m.short}</td>
                     {series.map((s) => {
                       const v = s.values[m.id];
                       return (
-                        <td key={s.player.id} className="p-1.5 text-right" style={{ color: "var(--chalk)" }}>
-                          {v.value == null ? <span style={dim}>Sin datos</span> : formatRadarNumber(m, v.value)}
+                        <td key={s.player.id} className="p-1 text-right" style={{ color: "var(--chalk)" }}>
+                          {v.value == null ? <span style={dim}>s/d</span> : formatRadarNumber(m, v.value)}
                           {v.value != null && m.kind !== "minutes" && (
-                            <div style={dim}>{m.kind === "pct" ? `${v.ok}/${v.attempts}` : `${v.total} total`}</div>
+                            <div style={dim}>{m.kind === "pct" ? `${v.ok}/${v.attempts}` : `(${v.total})`}</div>
                           )}
                         </td>
                       );
                     })}
-                    <td className="p-1.5 text-right" style={dim}>{avg[m.id] == null ? "—" : formatRadarNumber(m, avg[m.id])}</td>
+                    <td className="p-1 text-right" style={dim}>{avg[m.id] == null ? "—" : formatRadarNumber(m, avg[m.id])}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <div className="text-[11px] mt-2" style={dim}>
-            Conteos por cada 90 minutos jugados (debajo, el total de la temporada). Porcentajes solo con {RADAR_MIN_ATTEMPTS} o más
-            intentos. Media de {refCount} {groupLabel} con más de {RADAR_MIN_MINUTES}', ponderada por minutos.
+            Conteos por cada 90 minutos jugados (debajo, entre paréntesis, el total de la temporada). Porcentajes solo con{" "}
+            {RADAR_MIN_ATTEMPTS} o más intentos (debajo, aciertos/intentos); s/d = sin datos suficientes. Media de {refCount} {groupLabel} con más de {RADAR_MIN_MINUTES}', ponderada por minutos.
           </div>
         </div>
       )}
